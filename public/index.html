@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LyricsX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500&family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&family=Noto+Sans+Arabic:wght@600;800&family=Noto+Sans+SC:wght@500;800&family=Plus+Jakarta+Sans:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ░░ LYRICS SCREEN ░░ -->
+<div id="screen-lyrics" class="screen active">
+  <div id="bg"></div>
+  <div id="scrim"></div>
+  <div id="stage"></div>
+
+  <!-- Status overlay (loading / error / nothing playing) -->
+  <div id="status-overlay" class="status-overlay" hidden>
+    <span id="status-icon" class="status-icon">♪</span>
+    <p id="status-msg" class="status-msg"></p>
+    <button id="status-manual-btn" class="btn-pill" hidden>Load manually</button>
+  </div>
+
+  <!-- Controls overlay (auto-hide) -->
+  <div id="controls" class="controls">
+    <!-- Top bar -->
+    <div class="controls-top">
+      <div id="nowplaying" class="nowplaying">
+        <div id="np-art" class="np-art"></div>
+        <div class="np-info">
+          <div id="np-title" class="np-title">—</div>
+          <div id="np-artist" class="np-artist"></div>
+        </div>
+      </div>
+      <div class="controls-top-right">
+        <span id="lyrics-warn" class="lyrics-warn" hidden>⚠ Lyrics may not match</span>
+      </div>
+    </div>
+
+    <!-- Bottom dock -->
+    <div class="dock">
+      <button id="btn-player"   class="dock-btn" title="Player (P)" aria-label="Player">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5" fill="none"/><polygon points="10,8 16,12 10,16" fill="currentColor"/></svg>
+      </button>
+      <button id="btn-settings" class="dock-btn" title="Settings (S)" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </button>
+      <button id="btn-fullscreen" class="dock-btn" title="Fullscreen (F)" aria-label="Fullscreen">
+        <svg viewBox="0 0 24 24"><polyline points="15,3 21,3 21,9" stroke="currentColor" stroke-width="1.5" fill="none"/><polyline points="9,21 3,21 3,15" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="21" y1="3" x2="14" y2="10" stroke="currentColor" stroke-width="1.5"/><line x1="3" y1="21" x2="10" y2="14" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+    </div>
+
+    <!-- Progress bar (bottom) -->
+    <div class="progress-wrap">
+      <div id="progress-bar" class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div class="progress-times">
+        <span id="time-current">0:00</span>
+        <span id="time-total">0:00</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ░░ PLAYER SCREEN ░░ -->
+<div id="screen-player" class="screen" hidden>
+  <div class="player-bg"></div>
+  <div class="player-content">
+    <div id="player-art-wrap" class="player-art-wrap">
+      <div id="player-art" class="player-art"></div>
+    </div>
+    <div id="player-title"  class="player-title">—</div>
+    <div id="player-artist" class="player-artist"></div>
+
+    <div class="player-progress">
+      <div id="player-prog-bar" class="prog-bar">
+        <div id="player-prog-fill" class="prog-fill"></div>
+        <div id="player-prog-thumb" class="prog-thumb"></div>
+      </div>
+      <div class="player-times">
+        <span id="player-time-cur">0:00</span>
+        <span id="player-time-tot">0:00</span>
+      </div>
+    </div>
+
+    <div class="player-ctl">
+      <button id="ctl-shuffle"  class="ctl-btn" title="Shuffle" aria-label="Shuffle">
+        <svg viewBox="0 0 24 24"><polyline points="16,3 21,3 21,8" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="4" y1="20" x2="21" y2="3" stroke="currentColor" stroke-width="1.5"/><polyline points="21,16 21,21 16,21" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="15" y1="15" x2="21" y2="21" stroke="currentColor" stroke-width="1.5"/><line x1="4" y1="4" x2="9" y2="9" stroke="currentColor" stroke-width="1.5"/></svg>
+      </button>
+      <button id="ctl-prev"    class="ctl-btn" title="Previous" aria-label="Previous">
+        <svg viewBox="0 0 24 24"><polygon points="19,20 9,12 19,4" fill="currentColor"/><line x1="5" y1="19" x2="5" y2="5" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+      <button id="ctl-play"    class="ctl-btn big" title="Play/Pause (Space)" aria-label="Play/Pause">
+        <svg id="icon-play"  viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21" fill="currentColor"/></svg>
+        <svg id="icon-pause" viewBox="0 0 24 24" hidden><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></svg>
+      </button>
+      <button id="ctl-next"    class="ctl-btn" title="Next" aria-label="Next">
+        <svg viewBox="0 0 24 24"><polygon points="5,4 15,12 5,20" fill="currentColor"/><line x1="19" y1="5" x2="19" y2="19" stroke="currentColor" stroke-width="2"/></svg>
+      </button>
+      <button id="ctl-repeat"  class="ctl-btn" title="Repeat" aria-label="Repeat">
+        <svg viewBox="0 0 24 24"><polyline points="17,1 21,5 17,9" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M3 11V9a4 4 0 0 1 4-4h14" stroke="currentColor" stroke-width="1.5" fill="none"/><polyline points="7,23 3,19 7,15" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M21 13v2a4 4 0 0 1-4 4H3" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </button>
+    </div>
+
+    <button id="player-lyrics-btn" class="btn-pill">
+      <svg viewBox="0 0 24 24" style="width:1em;height:1em"><path d="M4 6h16M4 10h16M4 14h10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+      Lyrics
+    </button>
+  </div>
+
+  <!-- Bottom dock -->
+  <div class="dock">
+    <button id="player-btn-lyrics"   class="dock-btn active" title="Lyrics" aria-label="Lyrics">
+      <svg viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+    </button>
+    <button id="player-btn-settings" class="dock-btn" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+    </button>
+    <button id="player-btn-fullscreen" class="dock-btn" title="Fullscreen" aria-label="Fullscreen">
+      <svg viewBox="0 0 24 24"><polyline points="15,3 21,3 21,9" stroke="currentColor" stroke-width="1.5" fill="none"/><polyline points="9,21 3,21 3,15" stroke="currentColor" stroke-width="1.5" fill="none"/><line x1="21" y1="3" x2="14" y2="10" stroke="currentColor" stroke-width="1.5"/><line x1="3" y1="21" x2="10" y2="14" stroke="currentColor" stroke-width="1.5"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ░░ SETTINGS SCREEN ░░ -->
+<div id="screen-settings" class="screen" hidden>
+  <div class="settings-scroll">
+    <div class="settings-header">
+      <button id="settings-back" class="back-btn" aria-label="Back to lyrics">
+        <svg viewBox="0 0 24 24"><polyline points="15,18 9,12 15,6" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </button>
+      <h1 class="settings-title">Settings</h1>
+    </div>
+
+    <div class="settings-body">
+
+      <!-- Typography style -->
+      <section class="settings-section">
+        <h2 class="section-label">Typography style</h2>
+        <div id="style-tiles" class="tiles"></div>
+      </section>
+
+      <!-- Background -->
+      <section class="settings-section">
+        <h2 class="section-label">Background</h2>
+        <div id="bg-tiles" class="tiles bg-tiles"></div>
+      </section>
+
+      <!-- Color palette -->
+      <section class="settings-section">
+        <h2 class="section-label">Color palette</h2>
+        <div id="palette-row" class="palette-row"></div>
+      </section>
+
+      <!-- Font -->
+      <section class="settings-section">
+        <h2 class="section-label">Font</h2>
+        <div id="font-tiles" class="tiles font-tiles"></div>
+      </section>
+
+      <!-- Animation intensity -->
+      <section class="settings-section">
+        <h2 class="section-label">Animation intensity</h2>
+        <div class="slider-wrap">
+          <input type="range" id="intensity-slider" min="0" max="1.5" step="0.05" value="1">
+          <span id="intensity-val" class="slider-val">1.0</span>
+        </div>
+      </section>
+
+      <!-- Toggles -->
+      <section class="settings-section toggles-row">
+        <label class="toggle-row">
+          <span class="toggle-label">Reduced motion</span>
+          <span class="toggle-desc">Snap changes, no easing</span>
+          <button id="toggle-reduced" class="toggle-btn" role="switch" aria-checked="false"></button>
+        </label>
+        <label class="toggle-row">
+          <span class="toggle-label">Word icons</span>
+          <span class="toggle-desc">Small icons on matching words</span>
+          <button id="toggle-icons" class="toggle-btn" role="switch" aria-checked="true"></button>
+        </label>
+      </section>
+
+      <!-- Lyric timing nudge -->
+      <section class="settings-section">
+        <h2 class="section-label">Lyric timing</h2>
+        <div class="timing-row">
+          <button id="timing-minus" class="timing-btn">− 0.5 s</button>
+          <span id="timing-val" class="timing-val">0.0 s</span>
+          <button id="timing-plus"  class="timing-btn">+ 0.5 s</button>
+          <button id="timing-reset" class="timing-reset">Reset</button>
+        </div>
+      </section>
+
+      <!-- Manual search -->
+      <section class="settings-section">
+        <h2 class="section-label">Load lyrics manually</h2>
+        <div class="manual-row">
+          <input id="manual-artist" type="text" placeholder="Artist" class="text-input">
+          <input id="manual-title"  type="text" placeholder="Song title" class="text-input">
+          <button id="manual-load"  class="btn-pill">Load</button>
+        </div>
+      </section>
+
+      <!-- Demo -->
+      <section class="settings-section">
+        <h2 class="section-label">Demo</h2>
+        <button id="demo-btn" class="btn-pill">Play built-in demo</button>
+      </section>
+
+      <!-- Credits -->
+      <section class="settings-section credits">
+        <p>Lyrics provided by <a href="https://lrclib.net" target="_blank" rel="noopener">LRCLIB</a>. LyricsX is not affiliated with Spotify or LRCLIB.</p>
+        <p>Nothing leaves your computer except the lyrics lookup request to LRCLIB.</p>
+        <p>Open source · MIT license</p>
+      </section>
+
+    </div><!-- /settings-body -->
+  </div><!-- /settings-scroll -->
+</div>
+
+<script src="app.js" type="module"></script>
+</body>
+</html>
