@@ -29,8 +29,10 @@
     <!-- Top bar -->
     <div class="controls-top">
       <div id="nowplaying" class="nowplaying">
-        <a id="np-art-link" href="#" target="_blank" title="Click to view/download cover" class="np-art-wrap">
-          <div id="np-art" class="np-art"></div>
+        <a id="np-art-link" href="/api/art?download=1" download title="Click to download cover" class="np-art-wrap">
+          <div id="np-art" class="np-art">
+            <img id="np-art-img" class="np-cover-img" alt="" hidden>
+          </div>
           <span class="np-art-badge">⬇</span>
         </a>
         <div class="np-info">
@@ -74,7 +76,9 @@
   <div class="player-bg"></div>
   <div class="player-content">
     <div id="player-art-wrap" class="player-art-wrap">
-      <div id="player-art" class="player-art"></div>
+      <div id="player-art" class="player-art">
+        <img id="player-art-img" class="player-cover-img" alt="Album Cover" hidden>
+      </div>
     </div>
     <div id="player-title"  class="player-title">—</div>
     <div id="player-artist" class="player-artist"></div>

@@ -11,6 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;
 const PUBLIC = path.join(__dirname, 'public');
 const WORKER_SCRIPT = path.join(__dirname, 'server', 'worker.ps1');
+const ART_CACHE_FILE = path.join(__dirname, 'server', 'art_cache.bin');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -29,13 +30,8 @@ const MIME = {
 // ─── Persistent Background Worker ──────────────────────────────────────────
 
 let _mediaCache = { status: 'loading' };
-let _currentArt = {
-  buffer: null,
-  mime: 'image/jpeg',
-  version: 0,
-};
 let _workerProcess = null;
-let _lastTrackKey = '';
+const _lyricsCache = new Map(); // in-memory lyrics cache for instant 0.1ms responses
 
 function startWorker() {
   if (_workerProcess) {
@@ -52,7 +48,7 @@ function startWorker() {
   _workerProcess.stdout.on('data', (chunk) => {
     lineBuf += chunk.toString('utf8');
     const lines = lineBuf.split('\n');
-    lineBuf = lines.pop(); // keep incomplete tail
+    lineBuf = lines.pop(); // keep remainder
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -60,25 +56,7 @@ function startWorker() {
 
       try {
         const data = JSON.parse(trimmed);
-
-        // If a new thumbnail base64 string arrived, extract buffer & advance version
-        if (data.thumbnail) {
-          try {
-            _currentArt.buffer = Buffer.from(data.thumbnail, 'base64');
-            _currentArt.mime   = data.thumbMime || 'image/jpeg';
-            _currentArt.version++;
-          } catch {}
-          delete data.thumbnail;
-        }
-
-        const trackKey = `${data.title || ''}|${data.artist || ''}`;
-        if (trackKey !== _lastTrackKey) {
-          _lastTrackKey = trackKey;
-        }
-
-        data.hasArt     = !!_currentArt.buffer;
-        data.artVersion = _currentArt.version;
-        _mediaCache     = data;
+        _mediaCache = data;
       } catch {}
     }
   });
@@ -96,7 +74,6 @@ function startWorker() {
   });
 }
 
-// Start worker immediately
 startWorker();
 
 process.on('exit', () => {
@@ -111,31 +88,38 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-// ─── LRCLIB API ─────────────────────────────────────────────────────────────
+// ─── LRCLIB API with in-memory caching ─────────────────────────────────────
 
 const LRCLIB_BASE = 'https://lrclib.net/api';
 const LRCLIB_UA   = 'LyricsX/1.0 (https://github.com/lyricsx/lyricsx)';
 
 async function fetchLyrics(artist, title, duration) {
+  const cacheKey = `${artist.toLowerCase()}|${title.toLowerCase()}`;
+  if (_lyricsCache.has(cacheKey)) {
+    return _lyricsCache.get(cacheKey);
+  }
+
   const params = new URLSearchParams({ artist_name: artist, track_name: title });
   if (duration) params.set('duration', String(Math.round(+duration / 1000)));
 
   try {
     const res = await fetch(`${LRCLIB_BASE}/get?${params}`, {
       headers: { 'User-Agent': LRCLIB_UA },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
 
     if (res.status === 404) return { status: 'not_found' };
     if (!res.ok) return { status: 'error', msg: `LRCLIB HTTP ${res.status}` };
 
     const data = await res.json();
-    return {
+    const result = {
       status:  'ok',
       synced:  data.syncedLyrics  || null,
       plain:   data.plainLyrics   || null,
       trackId: data.id            || null,
     };
+    _lyricsCache.set(cacheKey, result);
+    return result;
   } catch (e) {
     if (e.name === 'TimeoutError') return { status: 'timeout' };
     if (e.name === 'TypeError')    return { status: 'offline' };
@@ -144,23 +128,33 @@ async function fetchLyrics(artist, title, duration) {
 }
 
 async function searchLyrics(artist, title) {
-  const params = new URLSearchParams({ q: `${artist} ${title}` });
+  const cacheKey = `${artist.toLowerCase()}|${title.toLowerCase()}`;
+  if (_lyricsCache.has(cacheKey)) {
+    return _lyricsCache.get(cacheKey);
+  }
+
+  const cleanTitle = title.replace(/\s*[\(\[].*?[\)\]]/g, '').trim(); // strip (Speed), [Remastered], etc.
+  const query = cleanTitle ? `${artist} ${cleanTitle}` : `${artist} ${title}`;
+  const params = new URLSearchParams({ q: query });
+
   try {
     const res = await fetch(`${LRCLIB_BASE}/search?${params}`, {
       headers: { 'User-Agent': LRCLIB_UA },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) return { status: 'not_found' };
     const results = await res.json();
-    if (!results.length) return { status: 'not_found' };
+    if (!results || !results.length) return { status: 'not_found' };
     const best = results[0];
-    return {
+    const result = {
       status:   'ok',
       synced:   best.syncedLyrics || null,
       plain:    best.plainLyrics  || null,
       trackId:  best.id           || null,
       fuzzy:    true,
     };
+    _lyricsCache.set(cacheKey, result);
+    return result;
   } catch {
     return { status: 'not_found' };
   }
@@ -185,17 +179,17 @@ const server = http.createServer(async (req, res) => {
   const url   = new URL(req.url, `http://localhost:${PORT}`);
   const path_ = url.pathname;
 
-  // ── 1. API: State (real-time from memory, < 0.5ms) ─────────────────────────
+  // ── 1. API: State ─────────────────────────────────────────────────────────
   if (path_ === '/api/state') {
     sendJson(res, _mediaCache);
     return;
   }
 
-  // ── 2. API: Album Artwork (cached binary image or download) ─────────────────
+  // ── 2. API: Album Artwork (cached binary file directly from disk) ───────────
   if (path_ === '/api/art') {
-    if (!_currentArt.buffer) {
+    if (!_mediaCache.hasArt || !fs.existsSync(ART_CACHE_FILE)) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('No album artwork available');
+      res.end('No artwork available');
       return;
     }
 
@@ -203,17 +197,25 @@ const server = http.createServer(async (req, res) => {
     const artist = _mediaCache.artist || 'Artist';
     const title  = _mediaCache.title  || 'Cover';
     const safeName = `${artist} - ${title}`.replace(/[\\/:*?"<>|]/g, '_');
-    const ext = _currentArt.mime === 'image/png' ? 'png' : 'jpg';
+    const mime = _mediaCache.thumbMime || 'image/jpeg';
+    const ext  = mime.includes('png') ? 'png' : 'jpg';
 
-    res.writeHead(200, {
-      'Content-Type': _currentArt.mime,
-      'Content-Length': _currentArt.buffer.length,
-      'Cache-Control': 'public, max-age=3600',
-      'Content-Disposition': isDownload
-        ? `attachment; filename="${encodeURIComponent(safeName)}.${ext}"`
-        : `inline; filename="artwork.${ext}"`,
+    fs.readFile(ART_CACHE_FILE, (err, buf) => {
+      if (err) {
+        res.writeHead(500);
+        res.end('Error reading artwork');
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': mime,
+        'Content-Length': buf.length,
+        'Cache-Control': 'public, max-age=86400',
+        'Content-Disposition': isDownload
+          ? `attachment; filename="${encodeURIComponent(safeName)}.${ext}"`
+          : `inline; filename="artwork.${ext}"`,
+      });
+      res.end(buf);
     });
-    res.end(_currentArt.buffer);
     return;
   }
 
@@ -229,7 +231,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     let result = await fetchLyrics(artist, title, duration);
-    if (result.status === 'not_found') {
+    if (result.status === 'not_found' || (!result.synced && !result.plain)) {
       result = await searchLyrics(artist, title);
     }
 

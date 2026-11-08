@@ -1,5 +1,6 @@
-# worker.ps1 - Persistent Windows GSMTC reader for LyricsX
-# Runs continuously, emits single-line JSON to stdout every 200ms
+# worker.ps1 - High-speed, low-overhead GSMTC reader for LyricsX
+# Runs continuously, emits compact JSON (< 200 bytes) to stdout every 200ms
+# Writes album art directly to disk (art_cache.bin) to avoid stdout pipe congestion
 
 param()
 $ErrorActionPreference = 'Continue'
@@ -23,10 +24,14 @@ try {
     }
 
     $asStreamMethod = [System.IO.WindowsRuntimeStreamExtensions].GetMethod('AsStream', [Type[]]@([Windows.Storage.Streams.IRandomAccessStream]))
+    $artBinPath     = [System.IO.Path]::Combine($PSScriptRoot, 'art_cache.bin')
 
     $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
 
     $lastArtTrack = ""
+    $artVersion   = 0
+    $hasArt       = $false
+    $thumbMime    = "image/jpeg"
 
     while ($true) {
         try {
@@ -34,7 +39,7 @@ try {
             if ($null -eq $session) {
                 '{"status":"nothing"}' | Write-Output
                 [Console]::Out.Flush()
-                Start-Sleep -Milliseconds 250
+                Start-Sleep -Milliseconds 200
                 continue
             }
 
@@ -65,13 +70,11 @@ try {
                 $rawPos
             }
 
-            # Thumbnail extraction when track changes or newly available
+            # Thumbnail extraction to disk file (avoids piping 200KB base64 over stdout)
             $curTrackKey = "$title|$artist|$album"
-            $thumbB64 = $null
-            $thumbMime = 'image/jpeg'
-
             if ($curTrackKey -ne $lastArtTrack) {
                 $lastArtTrack = $curTrackKey
+                $hasArt = $false
                 if ($null -ne $props.Thumbnail) {
                     try {
                         $stream = Await ($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
@@ -81,7 +84,9 @@ try {
                         $netStream.CopyTo($ms)
                         $bytes = $ms.ToArray()
                         if ($bytes.Length -gt 0) {
-                            $thumbB64 = [Convert]::ToBase64String($bytes)
+                            [System.IO.File]::WriteAllBytes($artBinPath, $bytes)
+                            $artVersion++
+                            $hasArt = $true
                         }
                     } catch {}
                 }
@@ -94,12 +99,11 @@ try {
                 album      = $album
                 position   = $calcPos
                 duration   = $durMs
+                hasArt     = $hasArt
+                artVersion = $artVersion
+                thumbMime  = $thumbMime
                 source     = [string]$session.SourceAppUserModelId
                 serverTime = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-            }
-            if ($null -ne $thumbB64) {
-                $outObj["thumbnail"] = $thumbB64
-                $outObj["thumbMime"] = $thumbMime
             }
 
             $outObj | ConvertTo-Json -Compress | Write-Output
@@ -110,7 +114,7 @@ try {
             [Console]::Out.Flush()
         }
 
-        Start-Sleep -Milliseconds 200
+        Start-Sleep -Milliseconds 150
     }
 
 } catch {

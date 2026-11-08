@@ -1,6 +1,6 @@
 /**
  * LyricsX — app.js
- * Full client-side application.
+ * High-performance, low-latency client engine.
  * Tokens, style math and palette values ported directly from
  * LyricsX_-_Design_Reference.html.
  */
@@ -114,7 +114,7 @@ function detectIcon(word) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 4. DEMO SONG (built-in, no network required)
+// 4. DEMO SONG
 // ══════════════════════════════════════════════════════════
 
 const DEMO_LRC = `[00:00.00] ♪
@@ -146,7 +146,7 @@ const DEMO_TRACK = {
 };
 
 // ══════════════════════════════════════════════════════════
-// 5. LRC PARSER & EQUAL WORD TIMING ENGINE
+// 5. LRC PARSER & NATURAL VOCAL PHRASING ENGINE
 // ══════════════════════════════════════════════════════════
 
 function parseLRC(lrcText) {
@@ -156,12 +156,10 @@ function parseLRC(lrcText) {
     if (!m) continue;
     const ms = (+m[1] * 60 + +m[2]) * 1000 + +m[3] * (m[3].length === 2 ? 10 : 1);
     const text = m[4].trim();
-    // Ignore metadata lines like [ar: ...] or [length: ...]
     if (text && !/^\[.+\]$/.test(text)) {
       lines.push({ time: ms, text });
     }
   }
-  // Sort strictly by timestamp to prevent disordered lines from LRCLIB
   lines.sort((a, b) => a.time - b.time);
   return lines;
 }
@@ -172,17 +170,14 @@ function buildLyrics(lrcLines, totalDuration) {
   const isInstrumental = (txt) => /^[♪♫\s]+$/.test(txt);
 
   lrcLines.forEach((line, li) => {
-    // Next line's timestamp determines line duration
     const nextLine = lrcLines[li + 1];
-    let lineDur = nextLine ? (nextLine.time - line.time) : 5000;
-    if (lineDur <= 200) lineDur = 3000;
-    if (lineDur > 12000) lineDur = 8000;
+    let rawGap = nextLine ? (nextLine.time - line.time) : 4000;
+    if (rawGap <= 0) rawGap = 3000;
 
     const inst = isInstrumental(line.text);
     const rtl  = isRTL(line.text);
     const cjk  = isCJK(line.text);
 
-    // Tokenize
     const tokens = cjk
       ? Array.from(line.text.match(/.{1,2}/gu) || [line.text])
       : inst
@@ -192,8 +187,12 @@ function buildLyrics(lrcLines, totalDuration) {
     const nWords = tokens.length;
     if (nWords === 0) return;
 
-    // Equal distribution: every word in the line gets an identical share of line duration
-    const wordDur = lineDur / nWords;
+    // Natural vocal phrasing: ~320ms per word average singing speed.
+    // If the gap to the next line is 6 seconds, vocals sing naturally, then rest.
+    const naturalDur = Math.max(900, nWords * 340);
+    const phraseDur  = Math.min(rawGap, naturalDur);
+    const wordDur    = phraseDur / nWords;
+
     const lineIndex = lines.length;
     const lineFirst = words.length;
 
@@ -202,7 +201,8 @@ function buildLyrics(lrcLines, totalDuration) {
       first: lineFirst,
       n: nWords,
       s: line.time,
-      e: line.time + lineDur,
+      e: line.time + phraseDur,
+      nextS: nextLine ? nextLine.time : (line.time + rawGap),
       rtl,
       cjk,
       inst,
@@ -235,24 +235,40 @@ function buildLyrics(lrcLines, totalDuration) {
   const N = words.length;
 
   function pos(t) {
-    let i = -1;
-    for (let j = 0; j < N; j++) {
-      if (words[j].s <= t) i = j;
-      else break;
-    }
-    let p;
-    if (i < 0) {
-      p = (t - words[0].s) / Math.max(1, words[1]?.s - words[0].s || 1000);
-    } else if (i === N - 1) {
-      p = i + clamp((t - words[i].s) / Math.max(1, words[i].e - words[i].s));
-    } else {
-      p = i + clamp((t - words[i].s) / Math.max(1, words[i+1].s - words[i].s));
+    // 1. Locate current line
+    let curLine = 0;
+    for (let l = 0; l < lines.length; l++) {
+      if (lines[l].s <= t) {
+        curLine = l;
+      } else {
+        break;
+      }
     }
 
-    const fi = clamp(Math.floor(p), 0, N - 1);
-    const L  = words[fi].line;
-    const ln = lines[L];
-    const q  = L + clamp((p - ln.first - ln.n + 0.5) / 0.5);
+    const ln = lines[curLine];
+    let p, q;
+
+    if (t < ln.s) {
+      p = 0;
+      q = 0;
+    } else if (t <= ln.e) {
+      // Actively vocalizing this line
+      const progress = clamp((t - ln.s) / Math.max(1, ln.e - ln.s));
+      p = ln.first + progress * (ln.n - 0.05);
+      q = curLine;
+    } else {
+      // Finished vocalizing, resting cleanly
+      p = ln.first + ln.n - 1;
+      const timeToNext = ln.nextS - t;
+      if (timeToNext <= 450 && curLine + 1 < lines.length) {
+        // Smooth transition into next line
+        const transition = 1 - (timeToNext / 450);
+        q = curLine + transition;
+      } else {
+        q = curLine;
+      }
+    }
+
     return { p, q };
   }
 
@@ -260,22 +276,22 @@ function buildLyrics(lrcLines, totalDuration) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 6. HIGH-PRECISION MONOTONIC CLOCK (NO BACKWARDS JITTER)
+// 6. SNAPPY MONOTONIC CLOCK (NO LATENCY, NO BACKWARDS SNAP)
 // ══════════════════════════════════════════════════════════
 
 class Clock {
   constructor() {
-    this.serverPos  = 0;
-    this.serverAt   = performance.now();
-    this.isPlaying  = false;
-    this.duration   = 0;
-    this.nudgeMs    = 0;
+    this.serverPos   = 0;
+    this.serverAt    = performance.now();
+    this.isPlaying   = false;
+    this.duration    = 0;
+    this.nudgeMs     = 0;
+    this.leadTimeMs  = 120; // 120ms lead compensation for audio output buffer & display refresh
   }
 
   update(posMs, playing, durationMs) {
     if (durationMs) this.duration = durationMs;
 
-    // Play/pause change: snap immediately
     if (this.isPlaying !== playing) {
       this.isPlaying = playing;
       this.serverPos = posMs;
@@ -289,26 +305,25 @@ class Clock {
       return;
     }
 
-    // Actively playing:
+    // Active playback
     const current = this.position;
-    const diff = posMs - current;
+    const diff = (posMs + this.leadTimeMs + this.nudgeMs) - current;
 
-    // Big jump / seek: snap immediately
-    if (Math.abs(diff) > 800) {
+    // Fast sync: if user sought (> 600ms difference), snap immediately
+    if (Math.abs(diff) > 600) {
       this.serverPos = posMs;
       this.serverAt  = performance.now();
       return;
     }
 
-    // Small jitter: do NOT snap backwards!
-    // Gently drift towards serverPos without reversing time
-    this.serverPos += diff * 0.12;
+    // Minor drift: smoothly nudge forward without ever stepping backward
+    this.serverPos += diff * 0.15;
     this.serverAt   = performance.now();
   }
 
   get position() {
     const elapsed = this.isPlaying ? (performance.now() - this.serverAt) : 0;
-    return Math.max(0, this.serverPos + elapsed + this.nudgeMs);
+    return Math.max(0, this.serverPos + elapsed + this.nudgeMs + this.leadTimeMs);
   }
 
   get progress() {
@@ -317,7 +332,7 @@ class Clock {
 }
 
 // ══════════════════════════════════════════════════════════
-// 7. SETTINGS (localStorage persistence)
+// 7. SETTINGS
 // ══════════════════════════════════════════════════════════
 
 const SETTINGS_KEY = 'lyricsx-settings';
@@ -740,7 +755,8 @@ class LyricsXApp {
     this._frameId     = null;
     this._pollTimer   = null;
     this._hideTimer   = null;
-    this._pollMs      = 250; // fast 250ms polling for instant response
+    this._pollMs      = 200;
+    this._nothingCount = 0;
 
     this._initDOM();
     this._initEvents();
@@ -764,17 +780,19 @@ class LyricsXApp {
     this.$statusManualBtn = document.getElementById('status-manual-btn');
     this.$lyricsWarn = document.getElementById('lyrics-warn');
 
-    // Artwork links
-    this.$npArtLink  = document.getElementById('np-art-link');
-    this.$npArt      = document.getElementById('np-art');
-    this.$npTitle    = document.getElementById('np-title');
-    this.$npArtist   = document.getElementById('np-artist');
-    this.$progFill   = document.getElementById('progress-fill');
-    this.$timeCur    = document.getElementById('time-current');
-    this.$timeTot    = document.getElementById('time-total');
+    // Artwork images
+    this.$npArtLink   = document.getElementById('np-art-link');
+    this.$npArt       = document.getElementById('np-art');
+    this.$npArtImg    = document.getElementById('np-art-img');
+    this.$npTitle     = document.getElementById('np-title');
+    this.$npArtist    = document.getElementById('np-artist');
+    this.$progFill    = document.getElementById('progress-fill');
+    this.$timeCur     = document.getElementById('time-current');
+    this.$timeTot     = document.getElementById('time-total');
 
     // Player screen
     this.$playerArt    = document.getElementById('player-art');
+    this.$playerArtImg = document.getElementById('player-art-img');
     this.$playerTitle  = document.getElementById('player-title');
     this.$playerArtist = document.getElementById('player-artist');
     this.$playerProg   = document.getElementById('player-prog-fill');
@@ -831,8 +849,8 @@ class LyricsXApp {
       saveSettings(this.settings);
       if (this.LY) this._mountStyle();
     });
-    document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-500));
-    document.getElementById('timing-plus').addEventListener('click', () => this._nudgeTiming(+500));
+    document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-300));
+    document.getElementById('timing-plus').addEventListener('click', () => this._nudgeTiming(+300));
     document.getElementById('timing-reset').addEventListener('click', () => {
       this.settings.timingMs = 0;
       this.clock.nudgeMs = 0;
@@ -973,7 +991,6 @@ class LyricsXApp {
     if (this.LY) {
       this.currentStyle.mount(this.$stage, this.LY, this.settings);
       this._applyFont();
-      // Synchronous layout calculation — ensures no visual flash on first frame
       if (this.$stage.clientWidth) {
         this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
       }
@@ -1086,15 +1103,21 @@ class LyricsXApp {
         this.artVersion = version;
         this.artUrl = `/api/art?v=${version}`;
 
-        this.$npArt.style.backgroundImage = `url('${this.artUrl}')`;
-        this.$playerArt.style.backgroundImage = `url('${this.artUrl}')`;
-        this.$playerArt.style.background = '';
-        this.$playerArt.style.backgroundSize = 'cover';
-        this.$playerArt.style.backgroundPosition = 'center';
+        if (this.$playerArtImg) {
+          this.$playerArtImg.src = this.artUrl;
+          this.$playerArtImg.hidden = false;
+        }
 
-        this.$npArtLink.href = `/api/art?v=${version}&download=1`;
-        this.$playerDownloadBtn.href = `/api/art?v=${version}&download=1`;
-        this.$playerDownloadBtn.hidden = false;
+        if (this.$npArtImg) {
+          this.$npArtImg.src = this.artUrl;
+          this.$npArtImg.hidden = false;
+        }
+
+        if (this.$npArtLink) this.$npArtLink.href = `/api/art?v=${version}&download=1`;
+        if (this.$playerDownloadBtn) {
+          this.$playerDownloadBtn.href = `/api/art?v=${version}&download=1`;
+          this.$playerDownloadBtn.hidden = false;
+        }
 
         BACKGROUNDS.album.setArt(this.artUrl);
       }
@@ -1102,10 +1125,15 @@ class LyricsXApp {
       if (this.artUrl) {
         this.artVersion = -1;
         this.artUrl = null;
-        this.$npArt.style.backgroundImage = '';
-        this.$playerArt.style.backgroundImage = '';
-        this.$playerArt.style.background = '';
-        this.$playerDownloadBtn.hidden = true;
+        if (this.$playerArtImg) {
+          this.$playerArtImg.hidden = true;
+          this.$playerArtImg.src = '';
+        }
+        if (this.$npArtImg) {
+          this.$npArtImg.hidden = true;
+          this.$npArtImg.src = '';
+        }
+        if (this.$playerDownloadBtn) this.$playerDownloadBtn.hidden = true;
         BACKGROUNDS.album.setArt(null);
       }
     }
@@ -1125,17 +1153,19 @@ class LyricsXApp {
 
   _handleState(state) {
     const { status, title, artist, album, position, duration, hasArt, artVersion, source } = state;
-    const isAd = title === 'Advertisement' || (source && source.toLowerCase().includes('ad'));
 
     if (status === 'nothing' || status === 'stopped') {
-      this._setStatus(true, '♪', 'Nothing is playing', true);
-      this.clock.update(0, false, 0);
+      this._nothingCount = (this._nothingCount || 0) + 1;
+      // Debounce: don't blank out screen on a 1-frame glitch
+      if (this._nothingCount >= 4) {
+        this._setStatus(true, '♪', 'Nothing is playing', true);
+        this.clock.update(0, false, 0);
+      }
       return;
     }
-    if (status === 'error') {
-      this._setStatus(true, '⚠', 'Could not connect to Windows media. Is Spotify running?', true);
-      return;
-    }
+    this._nothingCount = 0;
+
+    const isAd = title === 'Advertisement' || (source && source.toLowerCase().includes('ad'));
     if (isAd) {
       this._setStatus(true, '•', 'An advertisement is playing');
       this.clock.update(position ?? 0, false, duration ?? 0);
@@ -1154,25 +1184,17 @@ class LyricsXApp {
     this._updateArt(hasArt, artVersion);
 
     const trackKey = `${title}|${artist}`;
-    if (trackKey !== this._trackKey) {
+    if (trackKey !== this._trackKey && title) {
       this._trackKey = trackKey;
       this._loadLyrics(artist, title, duration);
     }
   }
 
   async _loadLyrics(artist, title, duration) {
-    this.LY = null;
-    this.lyricsState = 'loading';
     this.isDemo = false;
-    this._setStatus(true, '♪', 'Loading lyrics…');
-    this.$stage.innerHTML = '';
-    this.$lyricsWarn.hidden = true;
+    this.lyricsState = 'loading';
 
-    if (!artist && !title) {
-      this._setStatus(true, '♪', 'Nothing is playing', true);
-      return;
-    }
-
+    // DO NOT clear stage immediately to prevent screen flashing
     const result = await this.api.getLyrics(artist, title, duration);
     if (result.status === 'aborted') return;
 
