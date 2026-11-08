@@ -8,7 +8,7 @@ Open-source lyrics visualizer for Windows. Shows the lyrics of whatever you're c
 2. Double-click **`start.bat`** (or run `node server.js` in a terminal).
 3. Open **http://localhost:3000** in your browser.
 
-No accounts. No login. No setup.
+No accounts. No login. No setup :D
 
 ## Requirements
 
