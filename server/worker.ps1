@@ -32,6 +32,7 @@ try {
     $artVersion   = 0
     $hasArt       = $false
     $thumbMime    = "image/jpeg"
+    $artRetries   = 0
 
     while ($true) {
         try {
@@ -39,7 +40,7 @@ try {
             if ($null -eq $session) {
                 '{"status":"nothing"}' | Write-Output
                 [Console]::Out.Flush()
-                Start-Sleep -Milliseconds 200
+                Start-Sleep -Milliseconds 150
                 continue
             }
 
@@ -74,7 +75,13 @@ try {
             $curTrackKey = "$title|$artist|$album"
             if ($curTrackKey -ne $lastArtTrack) {
                 $lastArtTrack = $curTrackKey
-                $hasArt = $false
+                $hasArt       = $false
+                $artRetries   = 0
+            }
+
+            # If we don't have art for current track, attempt extraction (retry up to 10 ticks)
+            if (-not $hasArt -and $title -and ($artRetries -lt 10)) {
+                $artRetries++
                 if ($null -ne $props.Thumbnail) {
                     try {
                         $stream = Await ($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
@@ -114,7 +121,7 @@ try {
             [Console]::Out.Flush()
         }
 
-        Start-Sleep -Milliseconds 150
+        Start-Sleep -Milliseconds 100
     }
 
 } catch {

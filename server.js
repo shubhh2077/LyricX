@@ -56,6 +56,7 @@ function startWorker() {
 
       try {
         const data = JSON.parse(trimmed);
+        data._receivedAt = Date.now();
         _mediaCache = data;
       } catch {}
     }
@@ -181,13 +182,18 @@ const server = http.createServer(async (req, res) => {
 
   // ── 1. API: State ─────────────────────────────────────────────────────────
   if (path_ === '/api/state') {
-    sendJson(res, _mediaCache);
+    let out = _mediaCache;
+    if (_mediaCache.status === 'playing' && _mediaCache._receivedAt) {
+      const extra = Math.max(0, Date.now() - _mediaCache._receivedAt);
+      out = { ..._mediaCache, position: (_mediaCache.position || 0) + extra };
+    }
+    sendJson(res, out);
     return;
   }
 
   // ── 2. API: Album Artwork (cached binary file directly from disk) ───────────
   if (path_ === '/api/art') {
-    if (!_mediaCache.hasArt || !fs.existsSync(ART_CACHE_FILE)) {
+    if (!fs.existsSync(ART_CACHE_FILE)) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       res.end('No artwork available');
       return;
@@ -209,7 +215,7 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {
         'Content-Type': mime,
         'Content-Length': buf.length,
-        'Cache-Control': 'public, max-age=86400',
+        'Cache-Control': 'no-cache, must-revalidate',
         'Content-Disposition': isDownload
           ? `attachment; filename="${encodeURIComponent(safeName)}.${ext}"`
           : `inline; filename="artwork.${ext}"`,

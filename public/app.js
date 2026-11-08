@@ -1,6 +1,6 @@
 /**
  * LyricsX — app.js
- * High-performance, low-latency client engine.
+ * Continuous 60fps/120fps drift-corrected rendering engine.
  * Tokens, style math and palette values ported directly from
  * LyricsX_-_Design_Reference.html.
  */
@@ -187,11 +187,11 @@ function buildLyrics(lrcLines, totalDuration) {
     const nWords = tokens.length;
     if (nWords === 0) return;
 
-    // Natural vocal phrasing: ~320ms per word average singing speed.
-    // If the gap to the next line is 6 seconds, vocals sing naturally, then rest.
-    const naturalDur = Math.max(900, nWords * 340);
-    const phraseDur  = Math.min(rawGap, naturalDur);
-    const wordDur    = phraseDur / nWords;
+    // Distribute words equally across line duration
+    // For normal musical lines (<= 6.5s), words span the full line duration.
+    // For long instrumental gaps (> 6.5s), vocals conclude naturally and rest.
+    const phraseDur = rawGap <= 6500 ? rawGap : Math.min(rawGap - 1500, Math.max(2500, nWords * 500));
+    const wordDur   = phraseDur / nWords;
 
     const lineIndex = lines.length;
     const lineFirst = words.length;
@@ -211,7 +211,7 @@ function buildLyrics(lrcLines, totalDuration) {
     let lastIcon = -99;
     tokens.forEach((tok, k) => {
       const wordStart = line.time + k * wordDur;
-      const wordEnd   = wordStart + wordDur * 0.95;
+      const wordEnd   = wordStart + wordDur * 0.94;
       const rawIcon   = detectIcon(tok);
       const icon      = rawIcon && (k - lastIcon > 1) ? rawIcon : null;
       if (icon) lastIcon = k;
@@ -235,39 +235,32 @@ function buildLyrics(lrcLines, totalDuration) {
   const N = words.length;
 
   function pos(t) {
-    // 1. Locate current line
-    let curLine = 0;
-    for (let l = 0; l < lines.length; l++) {
-      if (lines[l].s <= t) {
-        curLine = l;
-      } else {
-        break;
-      }
+    let i = -1;
+    for (let j = 0; j < N; j++) {
+      if (words[j].s <= t) i = j;
+      else break;
     }
 
-    const ln = lines[curLine];
-    let p, q;
-
-    if (t < ln.s) {
-      p = 0;
-      q = 0;
-    } else if (t <= ln.e) {
-      // Actively vocalizing this line
-      const progress = clamp((t - ln.s) / Math.max(1, ln.e - ln.s));
-      p = ln.first + progress * (ln.n - 0.05);
-      q = curLine;
+    let p;
+    if (i < 0) {
+      const d0 = words[1] ? Math.max(1, words[1].s - words[0].s) : 1000;
+      p = (t - words[0].s) / d0;
+    } else if (i === N - 1) {
+      p = i + clamp((t - words[i].s) / Math.max(1, words[i].e - words[i].s));
     } else {
-      // Finished vocalizing, resting cleanly
-      p = ln.first + ln.n - 1;
-      const timeToNext = ln.nextS - t;
-      if (timeToNext <= 450 && curLine + 1 < lines.length) {
-        // Smooth transition into next line
-        const transition = 1 - (timeToNext / 450);
-        q = curLine + transition;
-      } else {
-        q = curLine;
-      }
+      p = i + (t - words[i].s) / Math.max(1, words[i + 1].s - words[i].s);
     }
+
+    const fi = clamp(Math.floor(p), 0, N - 1);
+    const L  = words[fi].line;
+    const ln = lines[L];
+
+    // Continuous line position q derived directly from monotonic word position p.
+    // Smooth, guaranteed non-reversing transition as p finishes the line.
+    const endP = ln.first + ln.n;
+    const transWindow = Math.min(0.6, ln.n * 0.35);
+    const trans = clamp((p - (endP - transWindow)) / transWindow);
+    const q = L + trans;
 
     return { p, q };
   }
@@ -276,54 +269,65 @@ function buildLyrics(lrcLines, totalDuration) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 6. SNAPPY MONOTONIC CLOCK (NO LATENCY, NO BACKWARDS SNAP)
+// 6. CONTINUOUS DRIFT-CORRECTED CLOCK (ZERO JITTER)
 // ══════════════════════════════════════════════════════════
 
 class Clock {
   constructor() {
-    this.serverPos   = 0;
-    this.serverAt    = performance.now();
-    this.isPlaying   = false;
-    this.duration    = 0;
-    this.nudgeMs     = 0;
-    this.leadTimeMs  = 120; // 120ms lead compensation for audio output buffer & display refresh
+    this.t = 0;              // continuous local clock in ms
+    this.lastFrameTime = 0;  // performance.now() of previous RAF frame
+    this.isPlaying = false;
+    this.duration = 0;
+    this.nudgeMs = 0;
+    this.leadTimeMs = 280;   // visual lead time for zero perceived audio latency
+    this.rate = 1.0;         // drift compensation rate
   }
 
-  update(posMs, playing, durationMs) {
+  // Advances continuously on every requestAnimationFrame frame (60-144fps)
+  tick(now) {
+    if (!this.lastFrameTime) this.lastFrameTime = now;
+    const dt = Math.min(100, Math.max(0, now - this.lastFrameTime));
+    this.lastFrameTime = now;
+
+    if (this.isPlaying) {
+      this.t += dt * this.rate;
+    }
+    return this.position;
+  }
+
+  // Synchronizes with incoming server position without jumping/stuttering
+  sync(serverPosMs, playing, durationMs) {
     if (durationMs) this.duration = durationMs;
 
     if (this.isPlaying !== playing) {
       this.isPlaying = playing;
-      this.serverPos = posMs;
-      this.serverAt  = performance.now();
+      this.t = serverPosMs;
+      this.rate = 1.0;
       return;
     }
 
     if (!playing) {
-      this.serverPos = posMs;
-      this.serverAt  = performance.now();
+      this.t = serverPosMs;
+      this.rate = 1.0;
       return;
     }
 
-    // Active playback
-    const current = this.position;
-    const diff = (posMs + this.leadTimeMs + this.nudgeMs) - current;
+    const target = serverPosMs;
+    const diff   = target - this.t;
 
-    // Fast sync: if user sought (> 600ms difference), snap immediately
+    // If seeked or large gap (> 600ms), snap immediately
     if (Math.abs(diff) > 600) {
-      this.serverPos = posMs;
-      this.serverAt  = performance.now();
+      this.t = target;
+      this.rate = 1.0;
       return;
     }
 
-    // Minor drift: smoothly nudge forward without ever stepping backward
-    this.serverPos += diff * 0.15;
-    this.serverAt   = performance.now();
+    // Gentle micro-adjustment of rate (±4%) to stay in perfect lockstep
+    this.rate = 1.0 + clamp(diff / 1000, -0.04, 0.04);
   }
 
   get position() {
-    const elapsed = this.isPlaying ? (performance.now() - this.serverAt) : 0;
-    return Math.max(0, this.serverPos + elapsed + this.nudgeMs + this.leadTimeMs);
+    return Math.max(0, this.t + this.nudgeMs + this.leadTimeMs);
   }
 
   get progress() {
@@ -343,7 +347,6 @@ const DEFAULT_SETTINGS = {
   palette:   'reference',
   font:      'auto',
   intensity: 1.0,
-  reduced:   false,
   icons:     true,
   timingMs:  0,
 };
@@ -364,7 +367,7 @@ function saveSettings(s) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 8. TYPOGRAPHY STYLES
+// 8. TYPOGRAPHY STYLES (ALWAYS FULL MOTION)
 // ══════════════════════════════════════════════════════════
 
 function setup(stage, c) {
@@ -406,7 +409,7 @@ function makeKineticStyle(key, name, blurb) {
       fit = els.map(e => Math.min(1, W * c.fitW / Math.max(1, e.offsetWidth)));
     },
     render(LY, t, settings) {
-      const P  = settings.reduced ? Math.floor(LY.pos(t).p) : LY.pos(t).p;
+      const P  = LY.pos(t).p;
       const I  = Math.min(settings.intensity, 1.3);
       const Lf = c.align === 'left';
       LY.words.forEach((w, j) => {
@@ -476,7 +479,7 @@ function makeStackStyle(key, name, blurb) {
       bs = [];
       els.forEach((e, i) => {
         e.style.width = (w * (c.left ? 0.84 : c.width)) + 'px';
-        const hh = e.offsetHeight || 1;
+        const hh = e.offsetHeight || (F * 1.3);
         bs[i] = Math.min(1, h * 0.6 / hh);
         const hs = hh * bs[i];
         cy[i] = c.stack && i ? cy[i-1] + (prev + hs) / 2 + T.space.lineGap * F : 0;
@@ -485,8 +488,8 @@ function makeStackStyle(key, name, blurb) {
     },
     render(LY, t, settings) {
       const r  = LY.pos(t);
-      const P  = settings.reduced ? Math.floor(r.p) : r.p;
-      const Q  = settings.reduced ? Math.floor(r.q + 1e-9) : r.q;
+      const P  = r.p;
+      const Q  = r.q;
       const I  = Math.min(settings.intensity, 1.3);
       const i0 = clamp(Math.floor(Q), 0, Math.max(0, cy.length - 1));
       const i1 = Math.min(i0 + 1, Math.max(0, cy.length - 1));
@@ -555,7 +558,7 @@ function makePosterStyle() {
       ));
     },
     render(LY, t, settings) {
-      const P = settings.reduced ? Math.floor(LY.pos(t).p) : LY.pos(t).p;
+      const P = LY.pos(t).p;
       const I = Math.min(settings.intensity, 1.3);
       LY.words.forEach((w, j) => {
         const d = j - P, a = Math.abs(d), o = curve(c.op, a), e = els[j];
@@ -591,13 +594,13 @@ function canvasBg(drawFn) {
       cv = el('canvas', '', null, host);
       cx = cv.getContext('2d');
     },
-    render(t, pal, w, h, reduced) {
+    render(t, pal, w, h) {
       if (!cv) return;
       if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
       cx.clearRect(0, 0, w, h);
       cx.globalAlpha  = T.bg.canvasAlpha;
       cx.fillStyle    = pal.glow;
-      drawFn(cx, reduced ? 0 : t, w, h, pal);
+      drawFn(cx, t, w, h, pal);
     },
   };
 }
@@ -614,9 +617,9 @@ const BACKGROUNDS = {
       host.innerHTML = '';
       this._e = el('div', 'bg-edge', null, host);
     },
-    render(t, pal, w, h, reduced) {
+    render(t, pal, w, h) {
       if (this._e) {
-        this._e.style.opacity = reduced ? 1 : 0.88 + 0.12 * Math.sin(t / 900);
+        this._e.style.opacity = 0.88 + 0.12 * Math.sin(t / 900);
       }
     },
   },
@@ -642,9 +645,11 @@ const BACKGROUNDS = {
         }
       }
     },
-    render(t, pal, w, h, reduced) {
+    render(t, pal, w, h) {
       if (this._e) {
-        this._e.style.transform = `scale(1.5) rotate(${reduced ? 0 : t / 250}deg)`;
+        // Silky continuous rotation at native display refresh rate
+        const deg = (performance.now() / 160) % 360;
+        this._e.style.transform = `scale(1.4) rotate(${deg.toFixed(2)}deg) translateZ(0)`;
       }
     },
   },
@@ -654,9 +659,9 @@ const BACKGROUNDS = {
       host.innerHTML = '';
       this._b = [0, 1, 2].map(() => el('div', 'blob', null, host));
     },
-    render(t, pal, w, h, reduced) {
+    render(t, pal, w, h) {
       if (!this._b) return;
-      const tt = reduced ? 0 : t / 1000;
+      const tt = t / 1000;
       this._b.forEach((b, i) => {
         b.style.transform = `translate3d(${Math.sin(tt*.3+i*2)*w*.25}px,${Math.cos(tt*.25+i*3)*h*.2}px,0) scale(${1+.2*Math.sin(tt*.2+i)})`;
         b.style.background = `radial-gradient(circle, color-mix(in srgb, ${pal.glow} 50%, transparent), transparent 65%)`;
@@ -687,9 +692,9 @@ const BACKGROUNDS = {
       host.innerHTML = '';
       this._e = el('div', 'grain', null, host);
     },
-    render(t, pal, w, h, reduced) {
+    render(t, pal, w, h) {
       if (this._e) {
-        const s = reduced ? 0 : Math.floor(t / 90);
+        const s = Math.floor(t / 90);
         this._e.style.transform = `translate3d(${hf(s,1)*80-40}px,${hf(s,2)*80-40}px,0)`;
       }
     },
@@ -755,7 +760,7 @@ class LyricsXApp {
     this._frameId     = null;
     this._pollTimer   = null;
     this._hideTimer   = null;
-    this._pollMs      = 200;
+    this._pollMs      = 100;
     this._nothingCount = 0;
 
     this._initDOM();
@@ -810,7 +815,6 @@ class LyricsXApp {
     this.$fontTiles  = document.getElementById('font-tiles');
     this.$intensitySlider = document.getElementById('intensity-slider');
     this.$intensityVal    = document.getElementById('intensity-val');
-    this.$toggleReduced   = document.getElementById('toggle-reduced');
     this.$toggleIcons     = document.getElementById('toggle-icons');
     this.$timingVal       = document.getElementById('timing-val');
     this.$manualArtist    = document.getElementById('manual-artist');
@@ -836,12 +840,6 @@ class LyricsXApp {
       this.$intensityVal.textContent = this.settings.intensity.toFixed(2);
       saveSettings(this.settings);
     });
-    this.$toggleReduced.addEventListener('click', () => {
-      const on = this.$toggleReduced.getAttribute('aria-checked') !== 'true';
-      this.settings.reduced = on;
-      this.$toggleReduced.setAttribute('aria-checked', on ? 'true' : 'false');
-      saveSettings(this.settings);
-    });
     this.$toggleIcons.addEventListener('click', () => {
       const on = this.$toggleIcons.getAttribute('aria-checked') !== 'true';
       this.settings.icons = on;
@@ -849,8 +847,8 @@ class LyricsXApp {
       saveSettings(this.settings);
       if (this.LY) this._mountStyle();
     });
-    document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-300));
-    document.getElementById('timing-plus').addEventListener('click', () => this._nudgeTiming(+300));
+    document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-250));
+    document.getElementById('timing-plus').addEventListener('click', () => this._nudgeTiming(+250));
     document.getElementById('timing-reset').addEventListener('click', () => {
       this.settings.timingMs = 0;
       this.clock.nudgeMs = 0;
@@ -889,29 +887,17 @@ class LyricsXApp {
         case 'ArrowRight':
           if (this.isDemo) {
             e.preventDefault();
-            this.clock.update(this.clock.position + 5000, this.clock.isPlaying, this.clock.duration);
+            this.clock.sync(this.clock.t + 5000, this.clock.isPlaying, this.clock.duration);
           }
           break;
         case 'ArrowLeft':
           if (this.isDemo) {
             e.preventDefault();
-            this.clock.update(Math.max(0, this.clock.position - 5000), this.clock.isPlaying, this.clock.duration);
+            this.clock.sync(Math.max(0, this.clock.t - 5000), this.clock.isPlaying, this.clock.duration);
           }
           break;
       }
     });
-
-    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-    mq.addEventListener('change', () => {
-      if (mq.matches) {
-        this.settings.reduced = true;
-        this.$toggleReduced.setAttribute('aria-checked', 'true');
-        saveSettings(this.settings);
-      }
-    });
-    if (mq.matches && !this.settings.reduced) {
-      this.settings.reduced = true;
-    }
 
     new ResizeObserver(() => {
       if (this.currentStyle && this.$stage.clientWidth) {
@@ -1073,12 +1059,11 @@ class LyricsXApp {
       });
     });
 
-    this.$intensitySlider.value       = this.settings.intensity;
-    this.$intensityVal.textContent    = this.settings.intensity.toFixed(2);
-    this.$toggleReduced.setAttribute('aria-checked', this.settings.reduced ? 'true' : 'false');
+    this.$intensitySlider.value    = this.settings.intensity;
+    this.$intensityVal.textContent = this.settings.intensity.toFixed(2);
     this.$toggleIcons.setAttribute('aria-checked', this.settings.icons ? 'true' : 'false');
-    this.$timingVal.textContent = (this.settings.timingMs / 1000).toFixed(1) + ' s';
-    this.clock.nudgeMs = this.settings.timingMs || 0;
+    this.$timingVal.textContent    = (this.settings.timingMs / 1000).toFixed(1) + ' s';
+    this.clock.nudgeMs             = this.settings.timingMs || 0;
   }
 
   _nudgeTiming(deltaMs) {
@@ -1107,10 +1092,16 @@ class LyricsXApp {
           this.$playerArtImg.src = this.artUrl;
           this.$playerArtImg.hidden = false;
         }
+        if (this.$playerArt) {
+          this.$playerArt.style.backgroundImage = `url('${this.artUrl}')`;
+        }
 
         if (this.$npArtImg) {
           this.$npArtImg.src = this.artUrl;
           this.$npArtImg.hidden = false;
+        }
+        if (this.$npArt) {
+          this.$npArt.style.backgroundImage = `url('${this.artUrl}')`;
         }
 
         if (this.$npArtLink) this.$npArtLink.href = `/api/art?v=${version}&download=1`;
@@ -1129,9 +1120,15 @@ class LyricsXApp {
           this.$playerArtImg.hidden = true;
           this.$playerArtImg.src = '';
         }
+        if (this.$playerArt) {
+          this.$playerArt.style.backgroundImage = '';
+        }
         if (this.$npArtImg) {
           this.$npArtImg.hidden = true;
           this.$npArtImg.src = '';
+        }
+        if (this.$npArt) {
+          this.$npArt.style.backgroundImage = '';
         }
         if (this.$playerDownloadBtn) this.$playerDownloadBtn.hidden = true;
         BACKGROUNDS.album.setArt(null);
@@ -1156,10 +1153,9 @@ class LyricsXApp {
 
     if (status === 'nothing' || status === 'stopped') {
       this._nothingCount = (this._nothingCount || 0) + 1;
-      // Debounce: don't blank out screen on a 1-frame glitch
       if (this._nothingCount >= 4) {
         this._setStatus(true, '♪', 'Nothing is playing', true);
-        this.clock.update(0, false, 0);
+        this.clock.sync(0, false, 0);
       }
       return;
     }
@@ -1168,12 +1164,12 @@ class LyricsXApp {
     const isAd = title === 'Advertisement' || (source && source.toLowerCase().includes('ad'));
     if (isAd) {
       this._setStatus(true, '•', 'An advertisement is playing');
-      this.clock.update(position ?? 0, false, duration ?? 0);
+      this.clock.sync(position ?? 0, false, duration ?? 0);
       return;
     }
 
     const isPlaying = status === 'playing';
-    this.clock.update(position ?? 0, isPlaying, duration ?? 0);
+    this.clock.sync(position ?? 0, isPlaying, duration ?? 0);
 
     this.$npTitle.textContent      = title  || '—';
     this.$npArtist.textContent     = artist || '';
@@ -1194,7 +1190,6 @@ class LyricsXApp {
     this.isDemo = false;
     this.lyricsState = 'loading';
 
-    // DO NOT clear stage immediately to prevent screen flashing
     const result = await this.api.getLyrics(artist, title, duration);
     if (result.status === 'aborted') return;
 
@@ -1251,7 +1246,7 @@ class LyricsXApp {
     if (!artist || !title) return;
     this.isDemo   = false;
     this._trackKey = `${title}|${artist}`;
-    this.clock.update(0, false, 300000);
+    this.clock.sync(0, false, 300000);
     this.$npTitle.textContent      = title;
     this.$npArtist.textContent     = artist;
     this.$playerTitle.textContent  = title;
@@ -1266,7 +1261,7 @@ class LyricsXApp {
     const lrcLines = parseLRC(DEMO_LRC);
     this.LY = buildLyrics(lrcLines, DEMO_TRACK.duration);
     this.lyricsState = 'ok';
-    this.clock.update(0, true, DEMO_TRACK.duration);
+    this.clock.sync(0, true, DEMO_TRACK.duration);
     this.$npTitle.textContent      = DEMO_TRACK.title;
     this.$npArtist.textContent     = DEMO_TRACK.artist;
     this.$playerTitle.textContent  = DEMO_TRACK.title;
@@ -1285,15 +1280,16 @@ class LyricsXApp {
   }
 
   _startRAF() {
-    const loop = () => {
+    const loop = (now) => {
       this._frameId = requestAnimationFrame(loop);
-      this._tick();
+      this._tick(now);
     };
     this._frameId = requestAnimationFrame(loop);
   }
 
-  _tick() {
-    const t    = this.clock.position;
+  _tick(now) {
+    // Smooth frame-accurate progression
+    const t    = this.clock.tick(now);
     const dur  = this.clock.duration;
     const prog = dur ? clamp(t / dur) : 0;
 
@@ -1310,7 +1306,7 @@ class LyricsXApp {
     }
 
     if (this.isDemo && this.LY && t > this.LY.end) {
-      this.clock.update(0, true, this.clock.duration);
+      this.clock.sync(0, true, this.clock.duration);
     }
 
     if (this.LY && this.currentStyle && this.view === 'lyrics' && this.$stage.clientWidth) {
@@ -1322,7 +1318,7 @@ class LyricsXApp {
     if (this.currentBg && this.view === 'lyrics') {
       const pal = T.palettes[this.settings.palette] || T.palettes.reference;
       try {
-        this.currentBg.render(t, pal, this.$bg.clientWidth, this.$bg.clientHeight, this.settings.reduced);
+        this.currentBg.render(t, pal, this.$bg.clientWidth, this.$bg.clientHeight);
       } catch {}
     }
   }
