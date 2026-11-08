@@ -29,7 +29,10 @@
     <!-- Top bar -->
     <div class="controls-top">
       <div id="nowplaying" class="nowplaying">
-        <div id="np-art" class="np-art"></div>
+        <a id="np-art-link" href="#" target="_blank" title="Click to view/download cover" class="np-art-wrap">
+          <div id="np-art" class="np-art"></div>
+          <span class="np-art-badge">⬇</span>
+        </a>
         <div class="np-info">
           <div id="np-title" class="np-title">—</div>
           <div id="np-artist" class="np-artist"></div>
@@ -106,10 +109,16 @@
       </button>
     </div>
 
-    <button id="player-lyrics-btn" class="btn-pill">
-      <svg viewBox="0 0 24 24" style="width:1em;height:1em"><path d="M4 6h16M4 10h16M4 14h10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
-      Lyrics
-    </button>
+    <div class="player-actions">
+      <button id="player-lyrics-btn" class="btn-pill">
+        <svg viewBox="0 0 24 24" style="width:1em;height:1em"><path d="M4 6h16M4 10h16M4 14h10" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>
+        Lyrics
+      </button>
+      <a id="player-download-art" href="/api/art?download=1" download class="btn-pill btn-secondary" title="Download album art">
+        <svg viewBox="0 0 24 24" style="width:1em;height:1em"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Download Cover
+      </a>
+    </div>
   </div>
 
   <!-- Bottom dock -->

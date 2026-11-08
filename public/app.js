@@ -117,7 +117,6 @@ function detectIcon(word) {
 // 4. DEMO SONG (built-in, no network required)
 // ══════════════════════════════════════════════════════════
 
-// LRC format demo lyrics (Tame Impala style)
 const DEMO_LRC = `[00:00.00] ♪
 [00:04.50] The less I know the better
 [00:08.80] Someone said you got a new friend
@@ -142,12 +141,12 @@ const DEMO_TRACK = {
   album: 'Currents',
   status: 'playing',
   position: 0,
-  duration: 215000,
-  thumbnail: null,
+  duration: 75000,
+  hasArt: false,
 };
 
 // ══════════════════════════════════════════════════════════
-// 5. LRC PARSER + LYRICS ENGINE
+// 5. LRC PARSER & EQUAL WORD TIMING ENGINE
 // ══════════════════════════════════════════════════════════
 
 function parseLRC(lrcText) {
@@ -157,55 +156,77 @@ function parseLRC(lrcText) {
     if (!m) continue;
     const ms = (+m[1] * 60 + +m[2]) * 1000 + +m[3] * (m[3].length === 2 ? 10 : 1);
     const text = m[4].trim();
-    if (text) lines.push({ time: ms, text });
+    // Ignore metadata lines like [ar: ...] or [length: ...]
+    if (text && !/^\[.+\]$/.test(text)) {
+      lines.push({ time: ms, text });
+    }
   }
+  // Sort strictly by timestamp to prevent disordered lines from LRCLIB
+  lines.sort((a, b) => a.time - b.time);
   return lines;
 }
 
 function buildLyrics(lrcLines, totalDuration) {
   const words = [];
   const lines = [];
-  const totalDur = totalDuration || (lrcLines.length ? lrcLines[lrcLines.length - 1].time + 8000 : 60000);
-
-  // Detect instrumental (lines containing only ♪ or similar)
   const isInstrumental = (txt) => /^[♪♫\s]+$/.test(txt);
 
   lrcLines.forEach((line, li) => {
-    const nextTime = lrcLines[li + 1]?.time ?? (line.time + 8000);
-    const lineDur  = Math.max(100, nextTime - line.time);
-    const inst     = isInstrumental(line.text);
-    const rtl      = isRTL(line.text);
-    const cjk      = isCJK(line.text);
+    // Next line's timestamp determines line duration
+    const nextLine = lrcLines[li + 1];
+    let lineDur = nextLine ? (nextLine.time - line.time) : 5000;
+    if (lineDur <= 200) lineDur = 3000;
+    if (lineDur > 12000) lineDur = 8000;
 
-    // Tokenize: CJK = every 1-2 chars, instrumental = single token, else spaces
+    const inst = isInstrumental(line.text);
+    const rtl  = isRTL(line.text);
+    const cjk  = isCJK(line.text);
+
+    // Tokenize
     const tokens = cjk
       ? Array.from(line.text.match(/.{1,2}/gu) || [line.text])
       : inst
         ? [line.text]
         : line.text.split(/\s+/).filter(Boolean);
 
-    const totalChars = tokens.reduce((a, t) => a + t.length + 1, 0);
-    const lineFirst  = words.length;
-    let   curTime    = line.time;
+    const nWords = tokens.length;
+    if (nWords === 0) return;
+
+    // Equal distribution: every word in the line gets an identical share of line duration
+    const wordDur = lineDur / nWords;
+    const lineIndex = lines.length;
+    const lineFirst = words.length;
 
     lines.push({
-      text: line.text, first: lineFirst, n: tokens.length,
-      s: line.time, rtl, cjk, inst,
+      text: line.text,
+      first: lineFirst,
+      n: nWords,
+      s: line.time,
+      e: line.time + lineDur,
+      rtl,
+      cjk,
+      inst,
     });
 
     let lastIcon = -99;
     tokens.forEach((tok, k) => {
-      const dur = lineDur * (tok.length + 1) / totalChars;
-      const rawIcon = detectIcon(tok);
-      // No back-to-back icons
-      const icon = rawIcon && (k - lastIcon > 1) ? rawIcon : null;
+      const wordStart = line.time + k * wordDur;
+      const wordEnd   = wordStart + wordDur * 0.95;
+      const rawIcon   = detectIcon(tok);
+      const icon      = rawIcon && (k - lastIcon > 1) ? rawIcon : null;
       if (icon) lastIcon = k;
+
       words.push({
-        t: tok, s: curTime, e: curTime + dur * 0.94,
-        line: li, k, rtl, inst, icon,
+        t: tok,
+        s: wordStart,
+        e: wordEnd,
+        line: lineIndex,
+        k,
+        rtl,
+        inst,
+        icon,
         side: (k % 2 === 0) ? 'l' : 'r',
       });
-      curTime += dur;
     });
   });
 
@@ -214,7 +235,6 @@ function buildLyrics(lrcLines, totalDuration) {
   const N = words.length;
 
   function pos(t) {
-    // Find fractional word index p
     let i = -1;
     for (let j = 0; j < N; j++) {
       if (words[j].s <= t) i = j;
@@ -222,13 +242,13 @@ function buildLyrics(lrcLines, totalDuration) {
     }
     let p;
     if (i < 0) {
-      p = (t - words[0].s) / Math.max(1, words[1]?.s - words[0].s || 1);
+      p = (t - words[0].s) / Math.max(1, words[1]?.s - words[0].s || 1000);
     } else if (i === N - 1) {
       p = i + clamp((t - words[i].s) / Math.max(1, words[i].e - words[i].s));
     } else {
-      p = i + (t - words[i].s) / Math.max(1, words[i+1].s - words[i].s);
+      p = i + clamp((t - words[i].s) / Math.max(1, words[i+1].s - words[i].s));
     }
-    // Fractional line index q
+
     const fi = clamp(Math.floor(p), 0, N - 1);
     const L  = words[fi].line;
     const ln = lines[L];
@@ -240,7 +260,7 @@ function buildLyrics(lrcLines, totalDuration) {
 }
 
 // ══════════════════════════════════════════════════════════
-// 6. INTERNAL CLOCK (smooth interpolation between server updates)
+// 6. HIGH-PRECISION MONOTONIC CLOCK (NO BACKWARDS JITTER)
 // ══════════════════════════════════════════════════════════
 
 class Clock {
@@ -249,14 +269,41 @@ class Clock {
     this.serverAt   = performance.now();
     this.isPlaying  = false;
     this.duration   = 0;
-    this.nudgeMs    = 0; // user timing offset
+    this.nudgeMs    = 0;
   }
 
   update(posMs, playing, durationMs) {
-    this.serverPos  = posMs;
-    this.serverAt   = performance.now();
-    this.isPlaying  = playing;
     if (durationMs) this.duration = durationMs;
+
+    // Play/pause change: snap immediately
+    if (this.isPlaying !== playing) {
+      this.isPlaying = playing;
+      this.serverPos = posMs;
+      this.serverAt  = performance.now();
+      return;
+    }
+
+    if (!playing) {
+      this.serverPos = posMs;
+      this.serverAt  = performance.now();
+      return;
+    }
+
+    // Actively playing:
+    const current = this.position;
+    const diff = posMs - current;
+
+    // Big jump / seek: snap immediately
+    if (Math.abs(diff) > 800) {
+      this.serverPos = posMs;
+      this.serverAt  = performance.now();
+      return;
+    }
+
+    // Small jitter: do NOT snap backwards!
+    // Gently drift towards serverPos without reversing time
+    this.serverPos += diff * 0.12;
+    this.serverAt   = performance.now();
   }
 
   get position() {
@@ -310,8 +357,6 @@ function setup(stage, c) {
   stage.style.lineHeight  = T.lineHeight[c.lh];
 }
 
-// ── 8a. Kinetic / Afterglow (word-by-word floating) ──────
-
 function makeKineticStyle(key, name, blurb) {
   const c = T.styles[key];
   let st, els = [], W = 0, F = 0, fit = [];
@@ -351,6 +396,7 @@ function makeKineticStyle(key, name, blurb) {
       const Lf = c.align === 'left';
       LY.words.forEach((w, j) => {
         const e  = els[j];
+        if (!e) return;
         const d  = j - P;
         const a  = Math.abs(d);
         const o  = curve(d < 0 && c.opPast ? c.opPast : c.op, a);
@@ -361,15 +407,13 @@ function makeKineticStyle(key, name, blurb) {
         const pa = c.pill ? clamp(1 - Math.abs(d - 1)) : 0;
         e.style.transform = `translate3d(${x}px,${y}px,0) translate(${Lf ? '0' : '-50%'},-50%) scale(${sc})`;
         e.style.opacity   = o;
-        e._pill.style.opacity = pa;
-        e._a.style.opacity    = 1 - pa;
-        e._b.style.opacity    = pa;
+        if (e._pill) e._pill.style.opacity = pa;
+        if (e._a)    e._a.style.opacity    = 1 - pa;
+        if (e._b)    e._b.style.opacity    = pa;
       });
     },
   };
 }
-
-// ── 8b. Stack styles (classic, karaoke, minimal, editorial, typewriter, pillrail) ──
 
 function makeStackStyle(key, name, blurb) {
   const c = T.styles[key];
@@ -389,16 +433,14 @@ function makeStackStyle(key, name, blurb) {
           e.textContent = ln.text;
           e.style.opacity = 0.3;
         } else if (c.chars) {
-          // Typewriter: individual characters
           e._c = Array.from(ln.text).map(x => el('span', 'ch', x, e));
-          e._c.push(el('span', 'ch', '▍', e)); // cursor
+          e._c.push(el('span', 'ch', '▍', e));
         } else if (c.words) {
-          // Karaoke / pillrail: individual word spans
           e._w = [];
           for (let k = 0; k < ln.n; k++) {
             const w  = LY.words[ln.first + k];
             const sp = el('span', 'wd',
-              `<i class="pl"></i><b>${w.t}</b><u>${w.t}</u>`, e);
+              `<i class="pl"></i><b>${w ? w.t : ''}</b><u>${w ? w.t : ''}</u>`, e);
             sp._p = sp.children[0];
             sp._a = sp.children[1];
             sp._u = sp.children[2];
@@ -415,6 +457,8 @@ function makeStackStyle(key, name, blurb) {
       const F = h * c.size;
       st.style.fontSize = F + 'px';
       let prev = 0;
+      cy = [];
+      bs = [];
       els.forEach((e, i) => {
         e.style.width = (w * (c.left ? 0.84 : c.width)) + 'px';
         const hh = e.offsetHeight || 1;
@@ -429,8 +473,8 @@ function makeStackStyle(key, name, blurb) {
       const P  = settings.reduced ? Math.floor(r.p) : r.p;
       const Q  = settings.reduced ? Math.floor(r.q + 1e-9) : r.q;
       const I  = Math.min(settings.intensity, 1.3);
-      const i0 = clamp(Math.floor(Q), 0, cy.length - 1);
-      const i1 = Math.min(i0 + 1, cy.length - 1);
+      const i0 = clamp(Math.floor(Q), 0, Math.max(0, cy.length - 1));
+      const i1 = Math.min(i0 + 1, Math.max(0, cy.length - 1));
       const cur = lerp(cy[i0] || 0, cy[i1] || 0, clamp(Q - i0));
 
       els.forEach((e, i) => {
@@ -458,7 +502,7 @@ function makeStackStyle(key, name, blurb) {
         }
         if (e._c) {
           const nChars = e._c.length - 1;
-          const Lc = LY.words[clamp(Math.floor(P), 0, LY.words.length - 1)].line;
+          const Lc = LY.words[clamp(Math.floor(P), 0, LY.words.length - 1)]?.line ?? 0;
           const f  = i < Lc ? 1 : i > Lc ? 0
             : clamp((P - LY.lines[i].first) / Math.max(1, LY.lines[i].n));
           e._c.forEach((s, k) => {
@@ -471,8 +515,6 @@ function makeStackStyle(key, name, blurb) {
     },
   };
 }
-
-// ── 8c. Poster (one giant word) ──────────────────────────
 
 function makePosterStyle() {
   const c = T.styles.poster;
@@ -502,7 +544,7 @@ function makePosterStyle() {
       const I = Math.min(settings.intensity, 1.3);
       LY.words.forEach((w, j) => {
         const d = j - P, a = Math.abs(d), o = curve(c.op, a), e = els[j];
-        if (o < 0.004) { e.style.opacity = 0; return; }
+        if (!e || o < 0.004) { if (e) e.style.opacity = 0; return; }
         e.style.opacity   = o;
         e.style.transform = `translate3d(0,${d * F * c.drift * I}px,0) translate(-50%,-50%) scale(${(fit[j] || 1) * (1 - c.shrink * I * Math.min(a, 1))})`;
       });
@@ -535,6 +577,7 @@ function canvasBg(drawFn) {
       cx = cv.getContext('2d');
     },
     render(t, pal, w, h, reduced) {
+      if (!cv) return;
       if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
       cx.clearRect(0, 0, w, h);
       cx.globalAlpha  = T.bg.canvasAlpha;
@@ -557,26 +600,37 @@ const BACKGROUNDS = {
       this._e = el('div', 'bg-edge', null, host);
     },
     render(t, pal, w, h, reduced) {
-      this._e.style.opacity = reduced ? 1 : 0.88 + 0.12 * Math.sin(t / 900);
+      if (this._e) {
+        this._e.style.opacity = reduced ? 1 : 0.88 + 0.12 * Math.sin(t / 900);
+      }
     },
   },
   album: {
     name: 'Album-art blur',
+    _artUrl: null,
     mount(host) {
       host.innerHTML = '';
       this._e = el('div', 'bg-art', null, host);
+      if (this._artUrl) {
+        this.setArt(this._artUrl);
+      }
     },
     setArt(url) {
-      if (url) {
-        this._e.style.backgroundImage = `url('${url}')`;
-        this._e.className = 'bg-art-img';
-      } else {
-        this._e.style.backgroundImage = '';
-        this._e.className = 'bg-art';
+      this._artUrl = url;
+      if (this._e) {
+        if (url) {
+          this._e.style.backgroundImage = `url('${url}')`;
+          this._e.className = 'bg-art-img';
+        } else {
+          this._e.style.backgroundImage = '';
+          this._e.className = 'bg-art';
+        }
       }
     },
     render(t, pal, w, h, reduced) {
-      this._e.style.transform = `scale(1.5) rotate(${reduced ? 0 : t / 150}deg)`;
+      if (this._e) {
+        this._e.style.transform = `scale(1.5) rotate(${reduced ? 0 : t / 250}deg)`;
+      }
     },
   },
   aurora: {
@@ -586,6 +640,7 @@ const BACKGROUNDS = {
       this._b = [0, 1, 2].map(() => el('div', 'blob', null, host));
     },
     render(t, pal, w, h, reduced) {
+      if (!this._b) return;
       const tt = reduced ? 0 : t / 1000;
       this._b.forEach((b, i) => {
         b.style.transform = `translate3d(${Math.sin(tt*.3+i*2)*w*.25}px,${Math.cos(tt*.25+i*3)*h*.2}px,0) scale(${1+.2*Math.sin(tt*.2+i)})`;
@@ -618,8 +673,10 @@ const BACKGROUNDS = {
       this._e = el('div', 'grain', null, host);
     },
     render(t, pal, w, h, reduced) {
-      const s = reduced ? 0 : Math.floor(t / 90);
-      this._e.style.transform = `translate3d(${hf(s,1)*80-40}px,${hf(s,2)*80-40}px,0)`;
+      if (this._e) {
+        const s = reduced ? 0 : Math.floor(t / 90);
+        this._e.style.transform = `translate3d(${hf(s,1)*80-40}px,${hf(s,2)*80-40}px,0)`;
+      }
     },
   },
 };
@@ -632,13 +689,12 @@ BACKGROUNDS.stars.name     = 'Starfield';
 
 class ApiClient {
   constructor() {
-    this._pollTimer  = null;
     this._lyricsCtrl = null;
   }
 
   async getState() {
     try {
-      const r = await fetch('/api/state', { signal: AbortSignal.timeout(4000) });
+      const r = await fetch('/api/state', { signal: AbortSignal.timeout(2000) });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return await r.json();
     } catch {
@@ -665,7 +721,7 @@ class ApiClient {
 }
 
 // ══════════════════════════════════════════════════════════
-// 11. APPLICATION STATE + MAIN CONTROLLER
+// 11. APPLICATION CONTROLLER
 // ══════════════════════════════════════════════════════════
 
 class LyricsXApp {
@@ -673,21 +729,18 @@ class LyricsXApp {
     this.settings   = loadSettings();
     this.clock      = new Clock();
     this.api        = new ApiClient();
-    this.LY         = null;      // current lyrics object
-    this.currentStyle = null;    // current style renderer
-    this.currentBg    = null;    // current bg renderer
-    this.currentTrack = null;    // last known track {title, artist, duration}
-    this.artUrl       = null;    // object URL for album art
-    this.lyricsState  = 'idle';  // idle | loading | ok | not_found | plain | offline | ad
-    this.plainLyrics  = null;    // plain lyrics text if no synced
-    this.fuzzyMatch   = false;
+    this.LY         = null;
+    this.currentStyle = null;
+    this.currentBg    = null;
+    this.artVersion   = -1;
+    this.artUrl       = null;
+    this.lyricsState  = 'idle';
     this.view         = 'lyrics';
     this.isDemo       = false;
     this._frameId     = null;
-    this._lastRaf     = performance.now();
+    this._pollTimer   = null;
     this._hideTimer   = null;
-    this._controlsVisible = true;
-    this._pollMs      = 800;
+    this._pollMs      = 250; // fast 250ms polling for instant response
 
     this._initDOM();
     this._initEvents();
@@ -700,8 +753,6 @@ class LyricsXApp {
     this._startRAF();
   }
 
-  // ── DOM helpers ──────────────────────────────────────────
-
   _initDOM() {
     this.$bg         = document.getElementById('bg');
     this.$scrim      = document.getElementById('scrim');
@@ -712,12 +763,16 @@ class LyricsXApp {
     this.$statusIcon = document.getElementById('status-icon');
     this.$statusManualBtn = document.getElementById('status-manual-btn');
     this.$lyricsWarn = document.getElementById('lyrics-warn');
+
+    // Artwork links
+    this.$npArtLink  = document.getElementById('np-art-link');
     this.$npArt      = document.getElementById('np-art');
     this.$npTitle    = document.getElementById('np-title');
     this.$npArtist   = document.getElementById('np-artist');
     this.$progFill   = document.getElementById('progress-fill');
     this.$timeCur    = document.getElementById('time-current');
     this.$timeTot    = document.getElementById('time-total');
+
     // Player screen
     this.$playerArt    = document.getElementById('player-art');
     this.$playerTitle  = document.getElementById('player-title');
@@ -726,8 +781,10 @@ class LyricsXApp {
     this.$playerThumb  = document.getElementById('player-prog-thumb');
     this.$playerTimeCur = document.getElementById('player-time-cur');
     this.$playerTimeTot = document.getElementById('player-time-tot');
-    this.$iconPlay  = document.getElementById('icon-play');
-    this.$iconPause = document.getElementById('icon-pause');
+    this.$playerDownloadBtn = document.getElementById('player-download-art');
+    this.$iconPlay   = document.getElementById('icon-play');
+    this.$iconPause  = document.getElementById('icon-pause');
+
     // Settings screen
     this.$styleTiles = document.getElementById('style-tiles');
     this.$bgTiles    = document.getElementById('bg-tiles');
@@ -743,7 +800,6 @@ class LyricsXApp {
   }
 
   _initEvents() {
-    // Screen navigation
     document.getElementById('btn-player').addEventListener('click', () => this._setView('player'));
     document.getElementById('btn-settings').addEventListener('click', () => this._setView('settings'));
     document.getElementById('btn-fullscreen').addEventListener('click', () => this._toggleFullscreen());
@@ -753,12 +809,10 @@ class LyricsXApp {
     document.getElementById('player-lyrics-btn').addEventListener('click', () => this._setView('lyrics'));
     document.getElementById('settings-back').addEventListener('click', () => this._setView('lyrics'));
 
-    // Auto-hide controls on mouse inactivity
     const lyricsScreen = document.getElementById('screen-lyrics');
     lyricsScreen.addEventListener('mousemove', () => this._showControls());
     lyricsScreen.addEventListener('click', () => this._showControls());
 
-    // Settings controls
     this.$intensitySlider.addEventListener('input', (e) => {
       this.settings.intensity = +e.target.value;
       this.$intensityVal.textContent = this.settings.intensity.toFixed(2);
@@ -775,7 +829,6 @@ class LyricsXApp {
       this.settings.icons = on;
       this.$toggleIcons.setAttribute('aria-checked', on ? 'true' : 'false');
       saveSettings(this.settings);
-      // Remount style to apply icon setting
       if (this.LY) this._mountStyle();
     });
     document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-500));
@@ -790,16 +843,13 @@ class LyricsXApp {
     document.getElementById('demo-btn').addEventListener('click', () => this._playDemo());
     this.$statusManualBtn.addEventListener('click', () => this._setView('settings'));
 
-    // Player controls (best-effort: GSMTC doesn't expose controls without WinRT session control)
     document.getElementById('ctl-play').addEventListener('click', () => {
-      // For demo mode, toggle locally
       if (this.isDemo) {
         this.clock.isPlaying = !this.clock.isPlaying;
         this._updatePlayPauseIcon(this.clock.isPlaying);
       }
     });
 
-    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
       if (e.target.tagName === 'INPUT') return;
       switch (e.key) {
@@ -833,7 +883,6 @@ class LyricsXApp {
       }
     });
 
-    // Reduced motion OS preference
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
     mq.addEventListener('change', () => {
       if (mq.matches) {
@@ -846,22 +895,18 @@ class LyricsXApp {
       this.settings.reduced = true;
     }
 
-    // ResizeObserver for layout
     new ResizeObserver(() => {
       if (this.currentStyle && this.$stage.clientWidth) {
         this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
       }
     }).observe(this.$stage);
 
-    // Font loaded → relayout
     document.fonts?.ready.then(() => {
       if (this.currentStyle && this.$stage.clientWidth) {
         this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
       }
     });
   }
-
-  // ── View management ──────────────────────────────────────
 
   _setView(view) {
     this.view = view;
@@ -879,24 +924,23 @@ class LyricsXApp {
       document.querySelectorAll('.screen-enter').forEach(s => s.classList.remove('screen-enter'));
     }, 300);
 
-    if (view === 'lyrics') this._showControls();
+    if (view === 'lyrics') {
+      this._showControls();
+      if (this.currentStyle && this.$stage.clientWidth) {
+        this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
+      }
+    }
   }
-
-  // ── Controls auto-hide ───────────────────────────────────
 
   _showControls() {
     this.$controls.classList.remove('hidden');
-    this._controlsVisible = true;
     clearTimeout(this._hideTimer);
     if (document.fullscreenElement) {
       this._hideTimer = setTimeout(() => {
         this.$controls.classList.add('hidden');
-        this._controlsVisible = false;
       }, 3000);
     }
   }
-
-  // ── Fullscreen ───────────────────────────────────────────
 
   _toggleFullscreen() {
     if (!document.fullscreenElement) {
@@ -905,8 +949,6 @@ class LyricsXApp {
       document.exitFullscreen?.();
     }
   }
-
-  // ── Palette ──────────────────────────────────────────────
 
   _applyPalette() {
     const pal = T.palettes[this.settings.palette] || T.palettes.reference;
@@ -919,8 +961,6 @@ class LyricsXApp {
     this.$scrim.style.setProperty('--scrim', T.bg.scrim[this.settings.bg] ?? 0);
   }
 
-  // ── Font ─────────────────────────────────────────────────
-
   _applyFont() {
     const key = this.settings.font === 'auto'
       ? (this.currentStyle?.font || 'jakarta')
@@ -928,39 +968,30 @@ class LyricsXApp {
     this.$stage.style.setProperty('--font', T.fonts[key]);
   }
 
-  // ── Style mounting ───────────────────────────────────────
-
   _mountStyle() {
     this.currentStyle = STYLES[this.settings.style] || STYLES.kinetic;
     if (this.LY) {
       this.currentStyle.mount(this.$stage, this.LY, this.settings);
       this._applyFont();
-      requestAnimationFrame(() => {
-        if (this.$stage.clientWidth) {
-          this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
-        }
-      });
+      // Synchronous layout calculation — ensures no visual flash on first frame
+      if (this.$stage.clientWidth) {
+        this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
+      }
     } else {
       this.$stage.innerHTML = '';
     }
   }
 
-  // ── Background mounting ──────────────────────────────────
-
   _mountBg() {
     this.currentBg = BACKGROUNDS[this.settings.bg] || BACKGROUNDS.black;
     this.currentBg.mount(this.$bg);
     this.$scrim.style.setProperty('--scrim', T.bg.scrim[this.settings.bg] ?? 0);
-    // If album bg and we have art, set it
     if (this.settings.bg === 'album' && this.artUrl && this.currentBg.setArt) {
       this.currentBg.setArt(this.artUrl);
     }
   }
 
-  // ── Settings UI population ───────────────────────────────
-
   _populateSettings() {
-    // Style tiles
     this.$styleTiles.innerHTML = '';
     Object.values(STYLES).forEach(s => {
       const btn = el('button', 'tile' + (this.settings.style === s.id ? ' active' : ''),
@@ -974,7 +1005,6 @@ class LyricsXApp {
       });
     });
 
-    // BG tiles
     this.$bgTiles.innerHTML = '';
     Object.entries(BACKGROUNDS).forEach(([key, bg]) => {
       const btn = el('button', 'tile' + (this.settings.bg === key ? ' active' : ''),
@@ -989,7 +1019,6 @@ class LyricsXApp {
       });
     });
 
-    // Palette swatches
     this.$palRow.innerHTML = '';
     Object.entries(T.palettes).forEach(([key, pal]) => {
       const btn = el('button', 'palette-swatch' + (this.settings.palette === key ? ' active' : ''),
@@ -1004,7 +1033,6 @@ class LyricsXApp {
       });
     });
 
-    // Font tiles
     this.$fontTiles.innerHTML = '';
     const fonts = {
       auto:    { label: 'Auto', desc: 'Per style' },
@@ -1023,14 +1051,11 @@ class LyricsXApp {
         this._populateSettings();
         this._applyFont();
         if (this.currentStyle && this.$stage.clientWidth) {
-          requestAnimationFrame(() => {
-            this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
-          });
+          this.currentStyle.layout(this.$stage.clientWidth, this.$stage.clientHeight);
         }
       });
     });
 
-    // Sliders / toggles
     this.$intensitySlider.value       = this.settings.intensity;
     this.$intensityVal.textContent    = this.settings.intensity.toFixed(2);
     this.$toggleReduced.setAttribute('aria-checked', this.settings.reduced ? 'true' : 'false');
@@ -1039,16 +1064,12 @@ class LyricsXApp {
     this.clock.nudgeMs = this.settings.timingMs || 0;
   }
 
-  // ── Timing nudge ─────────────────────────────────────────
-
   _nudgeTiming(deltaMs) {
     this.settings.timingMs = (this.settings.timingMs || 0) + deltaMs;
     this.clock.nudgeMs     = this.settings.timingMs;
     this.$timingVal.textContent = (this.settings.timingMs / 1000).toFixed(1) + ' s';
     saveSettings(this.settings);
   }
-
-  // ── Status display ───────────────────────────────────────
 
   _setStatus(show, icon, msg, showManual = false) {
     this.$status.hidden = !show;
@@ -1059,43 +1080,36 @@ class LyricsXApp {
     }
   }
 
-  // ── Art management ───────────────────────────────────────
+  _updateArt(hasArt, version) {
+    if (hasArt) {
+      if (this.artVersion !== version) {
+        this.artVersion = version;
+        this.artUrl = `/api/art?v=${version}`;
 
-  _setArt(thumbnail, thumbMime) {
-    // Revoke old object URL
-    if (this.artUrl) URL.revokeObjectURL(this.artUrl);
-    this.artUrl = null;
+        this.$npArt.style.backgroundImage = `url('${this.artUrl}')`;
+        this.$playerArt.style.backgroundImage = `url('${this.artUrl}')`;
+        this.$playerArt.style.background = '';
+        this.$playerArt.style.backgroundSize = 'cover';
+        this.$playerArt.style.backgroundPosition = 'center';
 
-    if (thumbnail) {
-      try {
-        const bytes = Uint8Array.from(atob(thumbnail), c => c.charCodeAt(0));
-        const blob  = new Blob([bytes], { type: thumbMime || 'image/jpeg' });
-        this.artUrl = URL.createObjectURL(blob);
-      } catch {}
-    }
+        this.$npArtLink.href = `/api/art?v=${version}&download=1`;
+        this.$playerDownloadBtn.href = `/api/art?v=${version}&download=1`;
+        this.$playerDownloadBtn.hidden = false;
 
-    // Update now-playing art
-    this.$npArt.style.backgroundImage = this.artUrl ? `url('${this.artUrl}')` : '';
-
-    // Update player art
-    if (this.artUrl) {
-      this.$playerArt.style.background = '';
-      this.$playerArt.style.backgroundImage = `url('${this.artUrl}')`;
-      this.$playerArt.style.backgroundSize  = 'cover';
-      this.$playerArt.style.backgroundPosition = 'center';
+        BACKGROUNDS.album.setArt(this.artUrl);
+      }
     } else {
-      this.$playerArt.style.backgroundImage = '';
-      // Reset to decorative gradient
-      this.$playerArt.style.background = '';
-    }
-
-    // Update album blur background
-    if (this.settings.bg === 'album' && this.currentBg?.setArt) {
-      this.currentBg.setArt(this.artUrl);
+      if (this.artUrl) {
+        this.artVersion = -1;
+        this.artUrl = null;
+        this.$npArt.style.backgroundImage = '';
+        this.$playerArt.style.backgroundImage = '';
+        this.$playerArt.style.background = '';
+        this.$playerDownloadBtn.hidden = true;
+        BACKGROUNDS.album.setArt(null);
+      }
     }
   }
-
-  // ── Polling ──────────────────────────────────────────────
 
   _startPoll() {
     this._poll();
@@ -1110,9 +1124,7 @@ class LyricsXApp {
   }
 
   _handleState(state) {
-    const { status, title, artist, album, position, duration, thumbnail, thumbMime, source } = state;
-
-    // Detect ads (Spotify SourceAppUserModelId for ads vs music)
+    const { status, title, artist, album, position, duration, hasArt, artVersion, source } = state;
     const isAd = title === 'Advertisement' || (source && source.toLowerCase().includes('ad'));
 
     if (status === 'nothing' || status === 'stopped') {
@@ -1130,37 +1142,23 @@ class LyricsXApp {
       return;
     }
 
-    // Update clock
     const isPlaying = status === 'playing';
     this.clock.update(position ?? 0, isPlaying, duration ?? 0);
 
-    // Update UI
-    this.$npTitle.textContent    = title   || '—';
-    this.$npArtist.textContent   = artist  || '';
-    this.$playerTitle.textContent  = title   || '—';
-    this.$playerArtist.textContent = artist  || '';
+    this.$npTitle.textContent      = title  || '—';
+    this.$npArtist.textContent     = artist || '';
+    this.$playerTitle.textContent  = title  || '—';
+    this.$playerArtist.textContent = artist || '';
 
-    // Update play/pause icon
     this._updatePlayPauseIcon(isPlaying);
+    this._updateArt(hasArt, artVersion);
 
-    // Art changed?
-    if (thumbnail && thumbnail !== this._lastThumb) {
-      this._lastThumb = thumbnail;
-      this._setArt(thumbnail, thumbMime);
-    } else if (!thumbnail && this._lastThumb) {
-      this._lastThumb = null;
-      this._setArt(null, null);
-    }
-
-    // Track changed?
     const trackKey = `${title}|${artist}`;
     if (trackKey !== this._trackKey) {
       this._trackKey = trackKey;
       this._loadLyrics(artist, title, duration);
     }
   }
-
-  // ── Lyrics loading ───────────────────────────────────────
 
   async _loadLyrics(artist, title, duration) {
     this.LY = null;
@@ -1176,7 +1174,6 @@ class LyricsXApp {
     }
 
     const result = await this.api.getLyrics(artist, title, duration);
-
     if (result.status === 'aborted') return;
 
     if (result.status === 'offline') {
@@ -1206,7 +1203,6 @@ class LyricsXApp {
         this._setStatus(true, '—', 'No lyrics found for this track.', true);
         return;
       }
-      // Detect purely instrumental
       const allInst = lrcLines.every(l => /^[♪♫\s]+$/.test(l.text));
       if (allInst) {
         this.lyricsState = 'instrumental';
@@ -1218,18 +1214,14 @@ class LyricsXApp {
       this._setStatus(false, '', '');
       this._mountStyle();
     } else {
-      // Plain lyrics — show as static Classic Stack
       this.lyricsState = 'plain';
       const lines = result.plain.split('\n').filter(l => l.trim());
       const plainLRC = lines.map((l, i) => ({ time: i * 4000, text: l }));
       this.LY = buildLyrics(plainLRC, lines.length * 4000 + 4000);
-      this.lyricsState = 'plain';
       this._setStatus(false, '', '');
       this._mountStyle();
     }
   }
-
-  // ── Manual load ──────────────────────────────────────────
 
   async _manualLoad() {
     const artist = this.$manualArtist.value.trim();
@@ -1238,15 +1230,13 @@ class LyricsXApp {
     this.isDemo   = false;
     this._trackKey = `${title}|${artist}`;
     this.clock.update(0, false, 300000);
-    this.$npTitle.textContent    = title;
-    this.$npArtist.textContent   = artist;
+    this.$npTitle.textContent      = title;
+    this.$npArtist.textContent     = artist;
     this.$playerTitle.textContent  = title;
     this.$playerArtist.textContent = artist;
     await this._loadLyrics(artist, title, null);
     this._setView('lyrics');
   }
-
-  // ── Demo mode ────────────────────────────────────────────
 
   _playDemo() {
     this.isDemo    = true;
@@ -1255,65 +1245,58 @@ class LyricsXApp {
     this.LY = buildLyrics(lrcLines, DEMO_TRACK.duration);
     this.lyricsState = 'ok';
     this.clock.update(0, true, DEMO_TRACK.duration);
-    this.$npTitle.textContent    = DEMO_TRACK.title;
-    this.$npArtist.textContent   = DEMO_TRACK.artist;
+    this.$npTitle.textContent      = DEMO_TRACK.title;
+    this.$npArtist.textContent     = DEMO_TRACK.artist;
     this.$playerTitle.textContent  = DEMO_TRACK.title;
     this.$playerArtist.textContent = DEMO_TRACK.artist;
     this._updatePlayPauseIcon(true);
+    this._updateArt(false, 0);
     this._setStatus(false, '', '');
     this.$lyricsWarn.hidden = true;
     this._mountStyle();
     this._setView('lyrics');
   }
 
-  // ── Play/pause icon ──────────────────────────────────────
-
   _updatePlayPauseIcon(playing) {
     this.$iconPlay.hidden  = playing;
     this.$iconPause.hidden = !playing;
   }
 
-  // ── RAF loop ─────────────────────────────────────────────
-
   _startRAF() {
-    const loop = (now) => {
+    const loop = () => {
       this._frameId = requestAnimationFrame(loop);
-      this._tick(now);
+      this._tick();
     };
     this._frameId = requestAnimationFrame(loop);
   }
 
-  _tick(now) {
-    const t   = this.clock.position;
-    const dur = this.clock.duration;
+  _tick() {
+    const t    = this.clock.position;
+    const dur  = this.clock.duration;
     const prog = dur ? clamp(t / dur) : 0;
 
-    // Update progress bars
     this.$progFill.style.width = (prog * 100) + '%';
     this.$timeCur.textContent  = fmtTime(t);
     this.$timeTot.textContent  = fmtTime(dur);
 
     if (this.view === 'player') {
       const pct = prog * 100;
-      this.$playerProg.style.width   = pct + '%';
-      this.$playerThumb.style.left   = pct + '%';
-      this.$playerTimeCur.textContent = fmtTime(t);
-      this.$playerTimeTot.textContent = fmtTime(dur);
+      this.$playerProg.style.width     = pct + '%';
+      this.$playerThumb.style.left     = pct + '%';
+      this.$playerTimeCur.textContent  = fmtTime(t);
+      this.$playerTimeTot.textContent  = fmtTime(dur);
     }
 
-    // Loop demo
     if (this.isDemo && this.LY && t > this.LY.end) {
       this.clock.update(0, true, this.clock.duration);
     }
 
-    // Render lyrics style
     if (this.LY && this.currentStyle && this.view === 'lyrics' && this.$stage.clientWidth) {
       try {
         this.currentStyle.render(this.LY, t, this.settings);
       } catch {}
     }
 
-    // Render background
     if (this.currentBg && this.view === 'lyrics') {
       const pal = T.palettes[this.settings.palette] || T.palettes.reference;
       try {
@@ -1323,13 +1306,7 @@ class LyricsXApp {
   }
 }
 
-// ══════════════════════════════════════════════════════════
-// 12. BOOT
-// ══════════════════════════════════════════════════════════
-
-// Kick off the app when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   window._app = new LyricsXApp();
-  // Show controls immediately
   window._app._showControls();
 });
