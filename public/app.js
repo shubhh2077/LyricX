@@ -52,7 +52,7 @@ const T = {
     rollMaxMs: 420,
     fadeStart: 62,
     fadeEnd: 90,
-    axisTilt: 3.5,
+    axisTilt: 0,
   },
   fisheye: {
     A: 0.12,
@@ -658,11 +658,12 @@ function makeAfterglowStyle() {
         const iconHtml = (showIcons && w.icon)
           ? `<span class="ic" style="order:${w.side === 'l' ? -1 : 1}">${ICONS[w.icon] || ''}</span>`
           : '';
-        const e = el('div', 'kw',
+        const e = el('div', 'kw kw-afterglow',
           iconHtml + `<span class="tw"><i class="pill"></i><b>${w.t}</b><u>${w.t}</u></span>`,
           st
         );
         e.style.left = '9%';
+        e.style.top = '50%';
         if (w.rtl) e.dir = 'rtl';
         e._pill = e.querySelector('.pill');
         e._a    = e.querySelector('b');
@@ -924,14 +925,30 @@ const BACKGROUNDS = {
     name: 'Soft aurora',
     mount(host) {
       host.innerHTML = '';
-      this._b = [0, 1, 2].map(() => el('div', 'blob', null, host));
+      this._b = [0, 1, 2].map((i) => el('div', `blob blob-${i}`, null, host));
     },
     render(t, pal, w, h) {
       if (!this._b) return;
-      const tt = t / 1000;
+      const tt = performance.now() / 1000;
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+
+      const offsets = [
+        { x: cx + Math.sin(tt * 0.28) * w * 0.22, y: cy + Math.cos(tt * 0.22) * h * 0.18, sc: 1.05 + 0.18 * Math.sin(tt * 0.25) },
+        { x: cx + Math.cos(tt * 0.24 + 2) * w * 0.24, y: cy + Math.sin(tt * 0.31 + 1) * h * 0.20, sc: 1.1 + 0.2 * Math.cos(tt * 0.22) },
+        { x: cx + Math.sin(tt * 0.2 + 4) * w * 0.20, y: cy + Math.cos(tt * 0.26 + 3) * h * 0.19, sc: 0.98 + 0.16 * Math.sin(tt * 0.3) },
+      ];
+
+      const grads = [
+        `radial-gradient(circle, color-mix(in srgb, ${pal.glow} 55%, transparent) 0%, transparent 70%)`,
+        `radial-gradient(circle, color-mix(in srgb, ${pal.hero} 45%, transparent) 0%, transparent 68%)`,
+        `radial-gradient(circle, color-mix(in srgb, ${pal.glow} 35%, ${pal.cream} 20%) 0%, transparent 65%)`,
+      ];
+
       this._b.forEach((b, i) => {
-        b.style.transform = `translate3d(${Math.sin(tt*.3+i*2)*w*.25}px,${Math.cos(tt*.25+i*3)*h*.2}px,0) scale(${1+.2*Math.sin(tt*.2+i)})`;
-        b.style.background = `radial-gradient(circle, color-mix(in srgb, ${pal.glow} 50%, transparent), transparent 65%)`;
+        const pos = offsets[i];
+        b.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0) translate(-50%, -50%) scale(${pos.sc})`;
+        b.style.background = grads[i];
       });
     },
   },
