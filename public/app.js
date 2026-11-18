@@ -376,6 +376,7 @@ const DEFAULT_SETTINGS = {
   timingMs:  0,
   fisheye:   false,
   edgeGlow:  true,
+  posterFade: true,
 };
 
 function loadSettings() {
@@ -828,9 +829,12 @@ function makePosterStyle() {
     render(LY, t, settings) {
       const P = LY.pos(t).p;
       const I = Math.min(settings.intensity, 1.3);
+      const fade = settings.posterFade !== false;
       LY.words.forEach((w, j) => {
-        const d = j - P, a = Math.abs(d), o = curve(c.op, a), e = els[j];
-        if (!e || o < 0.004) { if (e) e.style.opacity = 0; return; }
+        const d = j - P, a = Math.abs(d), e = els[j];
+        if (!e) return;
+        const o = fade ? curve(c.op, a) : (Math.round(P) === j ? 1 : 0);
+        if (o < 0.004) { e.style.opacity = 0; return; }
         e.style.opacity   = o;
         e.style.transform = `translate3d(0,${d * F * c.drift * I}px,0) translate(-50%,-50%) scale(${(fit[j] || 1) * (1 - c.shrink * I * Math.min(a, 1))})`;
       });
@@ -1103,6 +1107,7 @@ class LyricsXApp {
     this.$toggleIcons     = document.getElementById('toggle-icons');
     this.$toggleEdgeGlow  = document.getElementById('toggle-edge-glow');
     this.$toggleFisheye   = document.getElementById('toggle-fisheye');
+    this.$togglePosterFade = document.getElementById('toggle-poster-fade');
     this.$timingVal       = document.getElementById('timing-val');
     this.$manualArtist    = document.getElementById('manual-artist');
     this.$manualTitle     = document.getElementById('manual-title');
@@ -1150,6 +1155,14 @@ class LyricsXApp {
       this.$toggleFisheye.setAttribute('aria-checked', on ? 'true' : 'false');
       saveSettings(this.settings);
     });
+    if (this.$togglePosterFade) {
+      this.$togglePosterFade.addEventListener('click', () => {
+        const on = this.$togglePosterFade.getAttribute('aria-checked') !== 'true';
+        this.settings.posterFade = on;
+        this.$togglePosterFade.setAttribute('aria-checked', on ? 'true' : 'false');
+        saveSettings(this.settings);
+      });
+    }
     document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-250));
     document.getElementById('timing-plus').addEventListener('click', () => this._nudgeTiming(+250));
     document.getElementById('timing-reset').addEventListener('click', () => {
@@ -1297,6 +1310,7 @@ class LyricsXApp {
       this.$stage.innerHTML = '';
     }
     this._syncFisheyeToggleState();
+    this._syncPosterFadeToggleState();
   }
 
   _mountBg() {
@@ -1382,6 +1396,7 @@ class LyricsXApp {
     this.clock.nudgeMs             = this.settings.timingMs || 0;
     this._applyEdgeGlow();
     this._syncFisheyeToggleState();
+    this._syncPosterFadeToggleState();
   }
 
   _syncFisheyeToggleState() {
@@ -1396,6 +1411,19 @@ class LyricsXApp {
     if (desc) desc.textContent = isKinetic
       ? 'Spherical lens bulge on Kinetic Words'
       : 'Only available for Kinetic Words';
+  }
+
+  _syncPosterFadeToggleState() {
+    const isPoster = this.settings.style === 'poster';
+    const desc = document.getElementById('toggle-poster-fade-desc');
+    if (this.$togglePosterFade) {
+      this.$togglePosterFade.setAttribute('aria-checked', (this.settings.posterFade !== false) ? 'true' : 'false');
+    }
+    if (desc) {
+      desc.textContent = isPoster
+        ? 'Fade animation on Poster words'
+        : 'Applies to Poster typography style';
+    }
   }
 
   _nudgeTiming(deltaMs) {
