@@ -21,10 +21,16 @@ const T = {
   space: { lineGap: 0.35 },
   ease: { ui: 'cubic-bezier(.2,.8,.2,1)' },
   palettes: {
-    reference: { name: 'Reference pink', hero: '#d6a0cd', soft: '#c9a9bd', cream: '#f2e7a6', pill: '#2b2428', glow: '#e0509f' },
-    mint:      { name: 'Mint',           hero: '#a6e0cc', soft: '#9fc4b8', cream: '#eaf5c4', pill: '#1c2623', glow: '#2fd6a0' },
-    amber:     { name: 'Amber',          hero: '#f0bf88', soft: '#d2ab86', cream: '#fff0c4', pill: '#2a2119', glow: '#ff8a3d' },
-    ice:       { name: 'Ice',            hero: '#a8c7f2', soft: '#9db4d4', cream: '#e8f1ff', pill: '#1b2029', glow: '#4a8bff' },
+    reference: { name: 'Pink',    hero: '#d6a0cd', soft: '#c9a9bd', cream: '#f2e7a6', pill: '#2b2428', glow: '#e0509f' },
+    mint:      { name: 'Mint',    hero: '#a6e0cc', soft: '#9fc4b8', cream: '#eaf5c4', pill: '#1c2623', glow: '#2fd6a0' },
+    amber:     { name: 'Amber',   hero: '#f0bf88', soft: '#d2ab86', cream: '#fff0c4', pill: '#2a2119', glow: '#ff8a3d' },
+    ice:       { name: 'Ice',     hero: '#a8c7f2', soft: '#9db4d4', cream: '#e8f1ff', pill: '#1b2029', glow: '#4a8bff' },
+    violet:    { name: 'Violet',  hero: '#c4a8f5', soft: '#b09edd', cream: '#ede8ff', pill: '#1f1a2e', glow: '#8b5cf6' },
+    rose:      { name: 'Rose',    hero: '#f4a0b5', soft: '#d99aab', cream: '#fff0f3', pill: '#2a1a1e', glow: '#fb7185' },
+    ocean:     { name: 'Ocean',   hero: '#7dd3fc', soft: '#6bbae0', cream: '#e0f4ff', pill: '#0f2233', glow: '#0ea5e9' },
+    forest:    { name: 'Forest',  hero: '#86efac', soft: '#75d896', cream: '#ecfdf5', pill: '#0d2016', glow: '#22c55e' },
+    sunset:    { name: 'Sunset',  hero: '#fda4af', soft: '#e8939d', cream: '#fff7ed', pill: '#2c1810', glow: '#f97316' },
+    mono:      { name: 'Mono',    hero: '#d4d4d4', soft: '#b0b0b0', cream: '#f5f5f5', pill: '#1a1a1a', glow: '#a0a0a0' },
   },
   bg: { scrim: { black: 0, edge: 0, album: 0.55, aurora: 0.4, particles: 0.15, stars: 0.1, grain: 0.1 }, particles: 48, stars: 160, canvasAlpha: 0.4 },
   styles: {
@@ -349,6 +355,8 @@ const DEFAULT_SETTINGS = {
   intensity: 1.0,
   icons:     true,
   timingMs:  0,
+  fisheye:   false,
+  edgeGlow:  true,
 };
 
 function loadSettings() {
@@ -377,7 +385,7 @@ function setup(stage, c) {
 
 function makeKineticStyle(key, name, blurb) {
   const c = T.styles[key];
-  let st, els = [], W = 0, F = 0, fit = [];
+  let st, els = [], W = 0, F = 0, fit = [], pillIndices = new Set();
 
   return {
     id: key, name, blurb, font: c.font,
@@ -386,6 +394,18 @@ function makeKineticStyle(key, name, blurb) {
       st.innerHTML = '';
       setup(st, c);
       const showIcons = settings.icons;
+
+      // Select exactly one random word per line to receive the pill background
+      pillIndices = new Set();
+      if (key === 'kinetic') {
+        LY.lines.forEach((ln, li) => {
+          if (ln.n > 0) {
+            const randOffset = Math.floor(hf(li + 7, 33) * ln.n);
+            pillIndices.add(ln.first + randOffset);
+          }
+        });
+      }
+
       els = LY.words.map(w => {
         const iconHtml = (showIcons && w.icon)
           ? `<span class="ic" style="order:${w.side === 'l' ? -1 : 1}">${ICONS[w.icon]}</span>`
@@ -412,6 +432,7 @@ function makeKineticStyle(key, name, blurb) {
       const P  = LY.pos(t).p;
       const I  = Math.min(settings.intensity, 1.3);
       const Lf = c.align === 'left';
+      const useFisheye = settings.fisheye && key === 'kinetic';
       LY.words.forEach((w, j) => {
         const e  = els[j];
         if (!e) return;
@@ -419,10 +440,26 @@ function makeKineticStyle(key, name, blurb) {
         const a  = Math.abs(d);
         const o  = curve(d < 0 && c.opPast ? c.opPast : c.op, a);
         if (o < 0.004) { e.style.opacity = 0; return; }
-        const sc = (1 - (1 - curve(d < 0 && c.scalePast ? c.scalePast : c.scale, a)) * I) * (fit[j] || 1);
-        const y  = Math.sign(d) * curve(c.y, a) * F * c.ySpace;
-        const x  = Lf ? 0 : (j % 2 ? 1 : -1) * c.stagger * W * settings.intensity * (0.75 + 0.5 * hf(j, 3));
-        const pa = c.pill ? clamp(1 - Math.abs(d - 1)) : 0;
+
+        // Barrel-roll ease: use a smooth cubic S-curve on scale so words
+        // "roll" in with a soft ease-in-out rather than plain linear scaling.
+        const rawSc = curve(d < 0 && c.scalePast ? c.scalePast : c.scale, a);
+        // Ease the scale factor through a smoothstep for the barrel feel
+        const eased = rawSc < 1 ? rawSc * rawSc * (3 - 2 * rawSc) : rawSc;
+        const sc = (1 - (1 - eased) * I) * (fit[j] || 1);
+
+        const rawY = Math.sign(d) * curve(c.y, a) * F * c.ySpace;
+
+        // Fisheye: compress y positions near edges, expand near center
+        const y = useFisheye
+          ? Math.sign(rawY) * Math.pow(Math.abs(rawY), 0.72) * Math.pow(F * 2.5, 0.28)
+          : rawY;
+
+        // Kinetic words are aligned straight in center (no zigzag)
+        const x  = (key === 'kinetic' || Lf) ? 0 : (j % 2 ? 1 : -1) * c.stagger * W * settings.intensity * (0.75 + 0.5 * hf(j, 3));
+        // Only one word per line gets the pill background
+        const isPillWord = (key === 'kinetic') ? pillIndices.has(j) : c.pill;
+        const pa = isPillWord ? clamp(1 - Math.abs(d - 1)) : 0;
         e.style.transform = `translate3d(${x}px,${y}px,0) translate(${Lf ? '0' : '-50%'},-50%) scale(${sc})`;
         e.style.opacity   = o;
         if (e._pill) e._pill.style.opacity = pa;
@@ -767,6 +804,7 @@ class LyricsXApp {
     this._initEvents();
     this._applyPalette();
     this._applyFont();
+    this._applyEdgeGlow();
     this._mountBg();
     this._mountStyle();
     this._populateSettings();
@@ -816,9 +854,13 @@ class LyricsXApp {
     this.$intensitySlider = document.getElementById('intensity-slider');
     this.$intensityVal    = document.getElementById('intensity-val');
     this.$toggleIcons     = document.getElementById('toggle-icons');
+    this.$toggleEdgeGlow  = document.getElementById('toggle-edge-glow');
+    this.$toggleFisheye   = document.getElementById('toggle-fisheye');
     this.$timingVal       = document.getElementById('timing-val');
     this.$manualArtist    = document.getElementById('manual-artist');
     this.$manualTitle     = document.getElementById('manual-title');
+    // Edge glow overlay
+    this.$edgeGlowOverlay = document.getElementById('edge-glow-overlay');
   }
 
   _initEvents() {
@@ -846,6 +888,19 @@ class LyricsXApp {
       this.$toggleIcons.setAttribute('aria-checked', on ? 'true' : 'false');
       saveSettings(this.settings);
       if (this.LY) this._mountStyle();
+    });
+    this.$toggleEdgeGlow.addEventListener('click', () => {
+      const on = this.$toggleEdgeGlow.getAttribute('aria-checked') !== 'true';
+      this.settings.edgeGlow = on;
+      this.$toggleEdgeGlow.setAttribute('aria-checked', on ? 'true' : 'false');
+      saveSettings(this.settings);
+      this._applyEdgeGlow();
+    });
+    this.$toggleFisheye.addEventListener('click', () => {
+      const on = this.$toggleFisheye.getAttribute('aria-checked') !== 'true';
+      this.settings.fisheye = on;
+      this.$toggleFisheye.setAttribute('aria-checked', on ? 'true' : 'false');
+      saveSettings(this.settings);
     });
     document.getElementById('timing-minus').addEventListener('click', () => this._nudgeTiming(-250));
     document.getElementById('timing-plus').addEventListener('click', () => this._nudgeTiming(+250));
@@ -972,6 +1027,12 @@ class LyricsXApp {
     this.$stage.style.setProperty('--font', T.fonts[key]);
   }
 
+  _applyEdgeGlow() {
+    if (!this.$edgeGlowOverlay) return;
+    const on = this.settings.edgeGlow !== false;
+    this.$edgeGlowOverlay.classList.toggle('hidden-overlay', !on);
+  }
+
   _mountStyle() {
     this.currentStyle = STYLES[this.settings.style] || STYLES.kinetic;
     if (this.LY) {
@@ -1062,8 +1123,11 @@ class LyricsXApp {
     this.$intensitySlider.value    = this.settings.intensity;
     this.$intensityVal.textContent = this.settings.intensity.toFixed(2);
     this.$toggleIcons.setAttribute('aria-checked', this.settings.icons ? 'true' : 'false');
+    if (this.$toggleEdgeGlow)  this.$toggleEdgeGlow.setAttribute('aria-checked',  (this.settings.edgeGlow  !== false) ? 'true' : 'false');
+    if (this.$toggleFisheye)   this.$toggleFisheye.setAttribute('aria-checked',   this.settings.fisheye   ? 'true' : 'false');
     this.$timingVal.textContent    = (this.settings.timingMs / 1000).toFixed(1) + ' s';
     this.clock.nudgeMs             = this.settings.timingMs || 0;
+    this._applyEdgeGlow();
   }
 
   _nudgeTiming(deltaMs) {

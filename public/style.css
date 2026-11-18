@@ -111,6 +111,19 @@ a { color: var(--cream); }
   pointer-events: none;
 }
 
+/* Edge glow overlay: sits above stage, independent of background choice */
+.edge-glow-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  transition: opacity .4s ease;
+}
+.edge-glow-overlay.hidden-overlay {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* Album art blur */
 .bg-art, .bg-art-img {
   position: absolute;
