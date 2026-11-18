@@ -169,15 +169,39 @@ canvas { width: 100%; height: 100%; }
 /* ── Typography style primitives ─────────────────────────── */
 
 /* Kinetic words / Afterglow words */
+.kinetic-drum {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  pointer-events: none;
+  transform-origin: center center;
+}
+
+.kw-cell {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
 .kw {
   position: absolute;
-  top: 50%;
+  left: 0;
+  top: 0;
   display: inline-flex;
   align-items: center;
   gap: .4em;
   white-space: nowrap;
   will-change: transform, opacity;
-  transform-origin: center;
+  transform-origin: center center;
+  transform: translate(-50%, -50%);
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
 }
 .kw .ic {
   width: .55em; height: .55em;
@@ -189,7 +213,9 @@ canvas { width: 100%; height: 100%; }
 
 .tw {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  transform-style: preserve-3d;
 }
 .tw b { font-weight: inherit; color: var(--hero); }
 .tw u {
@@ -200,9 +226,41 @@ canvas { width: 100%; height: 100%; }
 }
 .pill {
   position: absolute;
-  inset: -.06em -.3em;
-  border-radius: .5em;
+  inset: -.08em -.36em;
+  border-radius: .48em;
   background: var(--pill);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+}
+
+.k-char {
+  display: inline-block;
+  position: relative;
+  will-change: transform;
+  transform-origin: center center;
+}
+.k-char b {
+  display: inline-block;
+  font-weight: inherit;
+  color: var(--hero);
+  opacity: calc(1 - var(--pa, 0));
+}
+.k-char u {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: inline-block;
+  text-decoration: none;
+  font-weight: inherit;
+  color: var(--cream);
+  opacity: var(--pa, 0);
+}
+
+.toggle-row.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.toggle-row.disabled button {
+  pointer-events: none;
 }
 
 /* Line stacks (classic, karaoke, minimal, editorial, typewriter, pillrail) */

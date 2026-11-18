@@ -44,6 +44,21 @@ const T = {
     poster:     { size: 0.55,  weight: 'hero',  lh: 'tight',    font: 'jakarta', fit:0.9, drift:0.06, shrink:0.25, op:[[0,1],[0.45,0]] },
     pillrail:   { size: 0.07,  weight: 'bold',  lh: 'normal',   font: 'jakarta', width:0.86, stack:true, words:true, pill:true, scale:[[0,1],[1,0.62],[2,0.5]], op:[[0,1],[1,0.4],[2,0.15],[3,0]] },
   },
+  barrel: {
+    step: 38,
+    perspective: 1.6,
+    rollFrac: 0.45,
+    rollMinMs: 160,
+    rollMaxMs: 420,
+    fadeStart: 62,
+    fadeEnd: 90,
+    axisTilt: 3.5,
+  },
+  fisheye: {
+    A: 0.12,
+    KB: 0.45,
+    Rl: 0.55,
+  },
 };
 
 // ══════════════════════════════════════════════════════════
@@ -98,6 +113,8 @@ const ICONS = {
   smile:  `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="var(--cream)"/><circle cx="8" cy="10" r="1.6" fill="#3a2a10"/><circle cx="16" cy="10" r="1.6" fill="#3a2a10"/><path d="M6 14c2 4 10 4 12 0" stroke="#3a2a10" stroke-width="2" fill="none"/></svg>`,
   drop:   `<svg viewBox="0 0 24 24"><path d="M12 2l-7 10a7 7 0 0014 0z" fill="currentColor"/></svg>`,
   music:  `<svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="6" cy="18" r="3" fill="currentColor"/><circle cx="18" cy="16" r="3" fill="currentColor"/></svg>`,
+  hourglass: `<svg viewBox="0 0 24 24"><path d="M6 2v6l4 4-4 4v6h12v-6l-4-4 4-4V2H6zm10 14.5V20H8v-3.5l4-4 4 4zM12 11.5l-4-4V4h8v3.5l-4 4z" fill="currentColor"/></svg>`,
+  clock: `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/><polyline points="12 6 12 12 16 14" stroke="currentColor" stroke-width="2" fill="none"/></svg>`,
 };
 
 const ICON_KEYWORDS = {
@@ -109,6 +126,8 @@ const ICON_KEYWORDS = {
   smile:  ['face','smile','laugh','happy','joy','light','alive','grin','beautiful','pretty'],
   drop:   ['rain','tears','cry','crying','tear','water','ocean','sea','wave','river','flood','drown'],
   music:  ['song','music','sing','sang','singing','melody','rhythm','beat','sound','hear','heard'],
+  hourglass: ['wait','waiting','slow','delay','hold','stay'],
+  clock:  ['minute','minutes','time','second','seconds','hour','hours','clock','late','early'],
 };
 
 function detectIcon(word) {
@@ -383,38 +402,267 @@ function setup(stage, c) {
   stage.style.lineHeight  = T.lineHeight[c.lh];
 }
 
-function makeKineticStyle(key, name, blurb) {
-  const c = T.styles[key];
-  let st, els = [], W = 0, F = 0, fit = [], pillIndices = new Set();
+function easeInOutCubic(x) {
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+}
+
+function makeKineticStyle() {
+  const c = T.styles.kinetic;
+  let st, drumEl, els = [], cells = [], W = 0, H = 0, F = 0, R = 0, fit = [], pillIndices = new Set();
 
   return {
-    id: key, name, blurb, font: c.font,
+    id: 'kinetic',
+    name: 'Kinetic Words',
+    blurb: 'Three words on a rotating 3D circular drum with optional fisheye lens.',
+    font: c.font,
+
+    mount(stage, LY, settings) {
+      st = stage;
+      st.innerHTML = '';
+      setup(st, c);
+
+      // Drum container with preserve-3d
+      drumEl = el('div', 'kinetic-drum', null, st);
+
+      const showIcons = settings.icons;
+
+      // Select exactly one random word per line to receive the pill background
+      pillIndices = new Set();
+      LY.lines.forEach((ln, li) => {
+        if (ln.n > 0) {
+          const randOffset = Math.floor(hf(li + 7, 33) * ln.n);
+          pillIndices.add(ln.first + randOffset);
+        }
+      });
+
+      cells = [];
+      els = [];
+
+      LY.words.forEach((w) => {
+        // Centering wrapper cell in 3D drum space
+        const cell = el('div', 'kw-cell', null, drumEl);
+
+        const iconHtml = (showIcons && w.icon)
+          ? `<span class="ic" style="order:${w.side === 'l' ? -1 : 1}">${ICONS[w.icon] || ''}</span>`
+          : '';
+
+        // Split word into one span per letter for fisheye lens
+        const chars = Array.from(w.t);
+        const charSpansHtml = chars.map((ch, ci) => {
+          const safeCh = ch === ' ' ? '&nbsp;' : ch;
+          return `<span class="k-char" data-ci="${ci}"><b>${safeCh}</b><u>${safeCh}</u></span>`;
+        }).join('');
+
+        const e = el('div', 'kw',
+          iconHtml + `<span class="tw"><i class="pill"></i>${charSpansHtml}</span>`,
+          cell
+        );
+
+        if (w.rtl) e.dir = 'rtl';
+        e._pill = e.querySelector('.pill');
+        e._charSpans = Array.from(e.querySelectorAll('.k-char'));
+
+        cells.push(cell);
+        els.push(e);
+      });
+    },
+
+    layout(w, h) {
+      W = w;
+      H = h;
+      F = Math.min(h * c.heroH, w * c.heroW);
+      st.style.fontSize = F + 'px';
+
+      // Stage perspective = 1.6 x stage height, centered
+      const P = T.barrel.perspective * h;
+      st.style.perspective = P + 'px';
+      st.style.perspectiveOrigin = '50% 50%';
+
+      // S = resting vertical distance between hero word and next word
+      const S = 1.02 * F;
+      const stepRad = (T.barrel.step * Math.PI) / 180;
+      R = S / Math.sin(stepRad);
+
+      if (drumEl) {
+        drumEl.style.transform = `translateZ(${-R}px) rotateZ(${T.barrel.axisTilt}deg)`;
+      }
+
+      // Measure fit and letter offsets once on build/resize:
+      fit = els.map((e) => {
+        const tw = e.querySelector('.tw');
+        const twW = tw ? tw.offsetWidth : e.offsetWidth;
+        const fitScale = Math.min(1, (W * c.fitW) / Math.max(1, twW));
+
+        const lettersMeta = [];
+        const charSpans = e._charSpans;
+        if (charSpans && charSpans.length) {
+          const halfTwW = twW / 2;
+          for (let ci = 0; ci < charSpans.length; ci++) {
+            const span = charSpans[ci];
+            const spanLeft = span.offsetLeft;
+            const spanW = span.offsetWidth;
+            lettersMeta.push({
+              span,
+              offset: (spanLeft + spanW / 2) - halfTwW,
+              halfW: Math.max(1, spanW / 2),
+            });
+          }
+        }
+        e._lettersMeta = lettersMeta;
+        return fitScale;
+      });
+    },
+
+    render(LY, t, settings) {
+      const rawP = LY.pos(t).p;
+      const N = LY.words.length;
+      if (N === 0) return;
+
+      const i = clamp(Math.floor(rawP), 0, N - 1);
+      const f = rawP - i;
+
+      // Roll timing: pure function of p, no extra state
+      const curStart = LY.words[i].s;
+      const nextStart = (i + 1 < N) ? LY.words[i + 1].s : (LY.words[i].e + 400);
+      const interval = Math.max(1, nextStart - curStart);
+
+      const rollMs = clamp(T.barrel.rollFrac * interval, T.barrel.rollMinMs, T.barrel.rollMaxMs);
+      const share = Math.min(1, rollMs / interval);
+      const f2 = clamp((f - (1 - share)) / share, 0, 1);
+      const pr = i + easeInOutCubic(f2);
+
+      const useFisheye = !!settings.fisheye;
+      const Rl = T.fisheye.Rl * Math.min(W, H);
+      const A = T.fisheye.A;
+      const KB = T.fisheye.KB;
+
+      LY.words.forEach((w, k) => {
+        const cell = cells[k];
+        const e = els[k];
+        if (!cell || !e) return;
+
+        const d = k - pr;
+        const absD = Math.abs(d);
+
+        // Outside active drum visible range
+        if (absD > 2.6) {
+          cell.style.display = 'none';
+          return;
+        }
+
+        const angle = d * T.barrel.step; // positive = below center
+        const absAngle = Math.abs(angle);
+
+        // Skip words beyond 95 degrees (behind drum)
+        if (absAngle > 95) {
+          cell.style.display = 'none';
+          return;
+        }
+        cell.style.display = '';
+
+        // Smooth fade as |angle| goes from 62 to 90 degrees
+        let angleFade = 1;
+        if (absAngle > T.barrel.fadeStart) {
+          angleFade = clamp(1 - (absAngle - T.barrel.fadeStart) / (T.barrel.fadeEnd - T.barrel.fadeStart));
+        }
+
+        const o = curve(d < 0 && c.opPast ? c.opPast : c.op, absD) * angleFade;
+        if (o < 0.003) {
+          cell.style.opacity = 0;
+          return;
+        }
+        cell.style.opacity = o;
+
+        // Scale: existing size curve
+        const s = curve(d < 0 && c.scalePast ? c.scalePast : c.scale, absD) * (fit[k] || 1);
+
+        // Word transform in exact order: rotateX(-angle) translateZ(R) scale(s)
+        cell.style.transform = `rotateX(${-angle}deg) translateZ(${R}px) scale(${s})`;
+
+        // Center word in wrapper
+        e.style.transform = `translate(-50%, -50%)`;
+
+        // Pill background opacity (only one word per line gets pill)
+        const isPillWord = pillIndices.has(k);
+        const pa = isPillWord ? clamp(1 - Math.abs(d - 1)) : 0;
+        e.style.setProperty('--pa', pa.toFixed(3));
+        if (e._pill) e._pill.style.opacity = pa;
+
+        // FISHEYE LENS
+        if (!useFisheye) {
+          if (e._hadFisheye) {
+            if (e._lettersMeta) {
+              for (let m = 0; m < e._lettersMeta.length; m++) {
+                e._lettersMeta[m].span.style.transform = '';
+              }
+            }
+            e._hadFisheye = false;
+          }
+        } else {
+          e._hadFisheye = true;
+          const angleRad = (angle * Math.PI) / 180;
+          const y = R * Math.sin(angleRad); // word vertical position in stage px
+
+          if (e._lettersMeta) {
+            for (let m = 0; m < e._lettersMeta.length; m++) {
+              const item = e._lettersMeta[m];
+              const x = item.offset;
+
+              const r = Math.hypot(x, y) / Rl;
+              const g = (1 + A) / (1 + KB * r * r);
+              const tx = x * (g - 1);
+              const ty = y * (g - 1);
+
+              // Follow curve: map left and right edge points
+              const halfW = item.halfW;
+              const rL = Math.hypot(x - halfW, y) / Rl;
+              const gL = (1 + A) / (1 + KB * rL * rL);
+              const xL = (x - halfW) * gL;
+              const yL = y * gL;
+
+              const rR = Math.hypot(x + halfW, y) / Rl;
+              const gR = (1 + A) / (1 + KB * rR * rR);
+              const xR = (x + halfW) * gR;
+              const yR = y * gR;
+
+              const dx = xR - xL;
+              const dy = yR - yL;
+              const theta = Math.atan2(dy, dx) * (180 / Math.PI);
+
+              item.span.style.transform = `translate3d(${tx}px,${ty}px,0) rotateZ(${theta}deg) scale(${g})`;
+            }
+          }
+        }
+      });
+    },
+  };
+}
+
+function makeAfterglowStyle() {
+  const c = T.styles.afterglow;
+  let st, els = [], W = 0, F = 0, fit = [];
+
+  return {
+    id: 'afterglow',
+    name: 'Afterglow',
+    blurb: 'Left-anchored trail: sung words linger and fade upward like smoke.',
+    font: c.font,
+
     mount(stage, LY, settings) {
       st = stage;
       st.innerHTML = '';
       setup(st, c);
       const showIcons = settings.icons;
 
-      // Select exactly one random word per line to receive the pill background
-      pillIndices = new Set();
-      if (key === 'kinetic') {
-        LY.lines.forEach((ln, li) => {
-          if (ln.n > 0) {
-            const randOffset = Math.floor(hf(li + 7, 33) * ln.n);
-            pillIndices.add(ln.first + randOffset);
-          }
-        });
-      }
-
-      els = LY.words.map(w => {
+      els = LY.words.map((w) => {
         const iconHtml = (showIcons && w.icon)
-          ? `<span class="ic" style="order:${w.side === 'l' ? -1 : 1}">${ICONS[w.icon]}</span>`
+          ? `<span class="ic" style="order:${w.side === 'l' ? -1 : 1}">${ICONS[w.icon] || ''}</span>`
           : '';
         const e = el('div', 'kw',
           iconHtml + `<span class="tw"><i class="pill"></i><b>${w.t}</b><u>${w.t}</u></span>`,
           st
         );
-        e.style.left = c.align === 'left' ? '9%' : '50%';
+        e.style.left = '9%';
         if (w.rtl) e.dir = 'rtl';
         e._pill = e.querySelector('.pill');
         e._a    = e.querySelector('b');
@@ -422,49 +670,31 @@ function makeKineticStyle(key, name, blurb) {
         return e;
       });
     },
+
     layout(w, h) {
       W = w;
       F = Math.min(h * c.heroH, w * c.heroW);
       st.style.fontSize = F + 'px';
-      fit = els.map(e => Math.min(1, W * c.fitW / Math.max(1, e.offsetWidth)));
+      fit = els.map((e) => Math.min(1, (W * c.fitW) / Math.max(1, e.offsetWidth)));
     },
+
     render(LY, t, settings) {
       const P  = LY.pos(t).p;
       const I  = Math.min(settings.intensity, 1.3);
-      const Lf = c.align === 'left';
-      const useFisheye = settings.fisheye && key === 'kinetic';
       LY.words.forEach((w, j) => {
-        const e  = els[j];
+        const e = els[j];
         if (!e) return;
-        const d  = j - P;
-        const a  = Math.abs(d);
-        const o  = curve(d < 0 && c.opPast ? c.opPast : c.op, a);
+        const d = j - P;
+        const a = Math.abs(d);
+        const o = curve(d < 0 && c.opPast ? c.opPast : c.op, a);
         if (o < 0.004) { e.style.opacity = 0; return; }
-
-        // Barrel-roll ease: use a smooth cubic S-curve on scale so words
-        // "roll" in with a soft ease-in-out rather than plain linear scaling.
-        const rawSc = curve(d < 0 && c.scalePast ? c.scalePast : c.scale, a);
-        // Ease the scale factor through a smoothstep for the barrel feel
-        const eased = rawSc < 1 ? rawSc * rawSc * (3 - 2 * rawSc) : rawSc;
-        const sc = (1 - (1 - eased) * I) * (fit[j] || 1);
-
-        const rawY = Math.sign(d) * curve(c.y, a) * F * c.ySpace;
-
-        // Fisheye: compress y positions near edges, expand near center
-        const y = useFisheye
-          ? Math.sign(rawY) * Math.pow(Math.abs(rawY), 0.72) * Math.pow(F * 2.5, 0.28)
-          : rawY;
-
-        // Kinetic words are aligned straight in center (no zigzag)
-        const x  = (key === 'kinetic' || Lf) ? 0 : (j % 2 ? 1 : -1) * c.stagger * W * settings.intensity * (0.75 + 0.5 * hf(j, 3));
-        // Only one word per line gets the pill background
-        const isPillWord = (key === 'kinetic') ? pillIndices.has(j) : c.pill;
-        const pa = isPillWord ? clamp(1 - Math.abs(d - 1)) : 0;
-        e.style.transform = `translate3d(${x}px,${y}px,0) translate(${Lf ? '0' : '-50%'},-50%) scale(${sc})`;
+        const sc = (1 - (1 - curve(d < 0 && c.scalePast ? c.scalePast : c.scale, a)) * I) * (fit[j] || 1);
+        const y  = Math.sign(d) * curve(c.y, a) * F * c.ySpace;
+        e.style.transform = `translate3d(0,${y}px,0) translate(0,-50%) scale(${sc})`;
         e.style.opacity   = o;
-        if (e._pill) e._pill.style.opacity = pa;
-        if (e._a)    e._a.style.opacity    = 1 - pa;
-        if (e._b)    e._b.style.opacity    = pa;
+        if (e._pill) e._pill.style.opacity = 0;
+        if (e._a)    e._a.style.opacity    = 1;
+        if (e._b)    e._b.style.opacity    = 0;
       });
     },
   };
@@ -608,8 +838,8 @@ function makePosterStyle() {
 }
 
 const STYLES = {
-  kinetic:    makeKineticStyle('kinetic',   'Kinetic Words', 'Three words stacked vertically; hero word 2.4× bigger, next word on a cream pill.'),
-  afterglow:  makeKineticStyle('afterglow', 'Afterglow',     'Left-anchored trail: sung words linger and fade upward like smoke.'),
+  kinetic:    makeKineticStyle(),
+  afterglow:  makeAfterglowStyle(),
   classic:    makeStackStyle ('classic',   'Classic Stack',  'Active line large; neighbours shrink and fade by distance.'),
   karaoke:    makeStackStyle ('karaoke',   'Karaoke',        'Word-by-word fill driven by the same fractional position.'),
   minimal:    makeStackStyle ('minimal',   'Minimal',        'One centred line, smooth crossfade.'),
@@ -897,6 +1127,7 @@ class LyricsXApp {
       this._applyEdgeGlow();
     });
     this.$toggleFisheye.addEventListener('click', () => {
+      if (this.settings.style !== 'kinetic') return;
       const on = this.$toggleFisheye.getAttribute('aria-checked') !== 'true';
       this.settings.fisheye = on;
       this.$toggleFisheye.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -1035,6 +1266,10 @@ class LyricsXApp {
 
   _mountStyle() {
     this.currentStyle = STYLES[this.settings.style] || STYLES.kinetic;
+    if (this.settings.style !== 'kinetic') {
+      this.$stage.style.perspective = '';
+      this.$stage.style.perspectiveOrigin = '';
+    }
     if (this.LY) {
       this.currentStyle.mount(this.$stage, this.LY, this.settings);
       this._applyFont();
@@ -1044,6 +1279,7 @@ class LyricsXApp {
     } else {
       this.$stage.innerHTML = '';
     }
+    this._syncFisheyeToggleState();
   }
 
   _mountBg() {
@@ -1128,6 +1364,21 @@ class LyricsXApp {
     this.$timingVal.textContent    = (this.settings.timingMs / 1000).toFixed(1) + ' s';
     this.clock.nudgeMs             = this.settings.timingMs || 0;
     this._applyEdgeGlow();
+    this._syncFisheyeToggleState();
+  }
+
+  _syncFisheyeToggleState() {
+    const isKinetic = this.settings.style === 'kinetic';
+    const row = document.getElementById('toggle-row-fisheye');
+    const desc = document.getElementById('toggle-fisheye-desc');
+    if (this.$toggleFisheye) {
+      this.$toggleFisheye.disabled = !isKinetic;
+      this.$toggleFisheye.setAttribute('aria-checked', (isKinetic && this.settings.fisheye) ? 'true' : 'false');
+    }
+    if (row) row.classList.toggle('disabled', !isKinetic);
+    if (desc) desc.textContent = isKinetic
+      ? 'Spherical lens bulge on Kinetic Words'
+      : 'Only available for Kinetic Words';
   }
 
   _nudgeTiming(deltaMs) {
