@@ -1,6 +1,6 @@
 # LyricsX
 
-Open-source lyrics visualizer for Windows. Shows the lyrics of whatever you're currently playing in Spotify as large, animated typography — in time with the music.
+Open-source lyrics visualizer for Windows. Shows the lyrics of whatever you're currently playing in Spotify as large, animated typography - in time with the music.
 
 ## Quick Start
 
@@ -42,8 +42,9 @@ No accounts. No login. No setup :D
 **Nothing leaves your computer** except the lyrics lookup request to [LRCLIB](https://lrclib.net). No analytics, no telemetry, no accounts.
 
 LyricsX is not affiliated with Spotify or LRCLIB.  
-Lyrics provided by [LRCLIB](https://lrclib.net) — a free, open lyrics database.
+Lyrics provided by [LRCLIB](https://lrclib.net) - a free, open lyrics database.
 
 ## License
 
 MIT
+**`Made By Shubhh :D`**
